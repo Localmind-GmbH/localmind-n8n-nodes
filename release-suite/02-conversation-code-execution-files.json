@@ -1,0 +1,248 @@
+{
+	"name": "Localmind release check 2: Conversation with code execution and file return",
+	"nodes": [
+		{
+			"parameters": {},
+			"id": "7f803ad3-61d1-513c-866d-272c31e224a3",
+			"name": "Start",
+			"type": "n8n-nodes-base.manualTrigger",
+			"typeVersion": 1,
+			"position": [0, 0]
+		},
+		{
+			"parameters": {
+				"jsCode": "// Fill in the IDs of your test setup, then run the workflow.\nreturn [{ json: {\n    \"agentId\": \"PASTE-ID-OF-AN-AGENT-WITH-CODE-EXECUTION\",\n    \"spaceId\": \"PASTE-SPACE-ID\"\n  } }];"
+			},
+			"id": "ac0da64b-2922-548e-b50f-2e1d3907ac5f",
+			"name": "Settings",
+			"type": "n8n-nodes-base.code",
+			"typeVersion": 2,
+			"position": [220, 0]
+		},
+		{
+			"parameters": {
+				"resource": "conversation",
+				"operation": "create",
+				"agent": {
+					"__rl": true,
+					"mode": "id",
+					"value": "={{ $('Settings').first().json.agentId }}"
+				},
+				"space": {
+					"__rl": true,
+					"mode": "id",
+					"value": "={{ $('Settings').first().json.spaceId }}"
+				},
+				"title": "=Release check {{ $now.toISO() }}"
+			},
+			"id": "e4db1322-b856-5917-9ed9-9dec7187f977",
+			"name": "Create Conversation",
+			"type": "@localmind/n8n-nodes-localmind.localmind",
+			"typeVersion": 1,
+			"position": [440, 0],
+			"credentials": {
+				"localmindApi": {
+					"id": "",
+					"name": "Localmind API"
+				}
+			}
+		},
+		{
+			"parameters": {
+				"resource": "conversation",
+				"operation": "sendMessage",
+				"conversation": {
+					"__rl": true,
+					"mode": "id",
+					"value": "={{ $('Create Conversation').first().json.id }}"
+				},
+				"message": "Use code execution to create an Excel file named exactly \"Release Check Ü (1).xlsx\" (keep the spaces, the umlaut and the brackets) with one sheet that lists the numbers 1 to 10 in column A and their squares in column B. Then reply with the word DONE.",
+				"waitForAnswer": true,
+				"options": {
+					"timeoutMinutes": 15,
+					"includeToolCalls": true
+				}
+			},
+			"id": "594e1be7-db72-520e-8eda-e99336e62a6e",
+			"name": "Send Message",
+			"type": "@localmind/n8n-nodes-localmind.localmind",
+			"typeVersion": 1,
+			"position": [660, 0],
+			"credentials": {
+				"localmindApi": {
+					"id": "",
+					"name": "Localmind API"
+				}
+			}
+		},
+		{
+			"parameters": {
+				"jsCode": "const item = $input.first();\nconst { text: answer, files } = item.json;\nif (!answer) throw new Error('Empty answer');\nif (!files?.length) throw new Error(`No generated file. Answer: ${answer}`);\nconst file = item.binary?.[files[0].binaryProperty];\nif (!file) throw new Error('The generated file was not downloaded');\n// A name with spaces, an umlaut and brackets checks that its download link is encoded right.\nif (file.fileName !== 'Release Check Ü (1).xlsx') throw new Error(`Expected the file \"Release Check Ü (1).xlsx\", got \"${file.fileName}\" (if the agent renamed it, run again)`);\nreturn [item];"
+			},
+			"id": "551f7910-c1dd-5534-ad6d-c957866c2514",
+			"name": "Check Answer",
+			"type": "n8n-nodes-base.code",
+			"typeVersion": 2,
+			"position": [880, 0]
+		},
+		{
+			"parameters": {
+				"resource": "conversation",
+				"operation": "getMessages",
+				"conversation": {
+					"__rl": true,
+					"mode": "id",
+					"value": "={{ $('Create Conversation').first().json.id }}"
+				},
+				"simplify": true
+			},
+			"id": "42824954-a0e6-580b-a7a0-265b7b33725f",
+			"name": "Get Messages",
+			"type": "@localmind/n8n-nodes-localmind.localmind",
+			"typeVersion": 1,
+			"position": [1100, 0],
+			"credentials": {
+				"localmindApi": {
+					"id": "",
+					"name": "Localmind API"
+				}
+			}
+		},
+		{
+			"parameters": {
+				"jsCode": "const messages = $input.all().map((item) => item.json);\nconst answer = messages.filter((m) => m.role === 'assistant').pop();\nif (messages.length < 2 || !answer) throw new Error(`Expected a question and an answer, got ${messages.length} messages`);\nif (!answer.files?.length) throw new Error('Get Messages shows no generated file');\nreturn [{ json: { messages: messages.length } }];"
+			},
+			"id": "7671670c-fc5e-520c-bb5f-e16d3004a461",
+			"name": "Check Messages",
+			"type": "n8n-nodes-base.code",
+			"typeVersion": 2,
+			"position": [1320, 0]
+		},
+		{
+			"parameters": {
+				"resource": "conversation",
+				"operation": "delete",
+				"conversation": {
+					"__rl": true,
+					"mode": "id",
+					"value": "={{ $('Create Conversation').first().json.id }}"
+				}
+			},
+			"id": "aa254cdc-1b0b-53b0-8a38-0a4846066bfd",
+			"name": "Delete Conversation",
+			"type": "@localmind/n8n-nodes-localmind.localmind",
+			"typeVersion": 1,
+			"position": [1540, 0],
+			"credentials": {
+				"localmindApi": {
+					"id": "",
+					"name": "Localmind API"
+				}
+			}
+		},
+		{
+			"parameters": {
+				"jsCode": "return [{ json: { passed: 'Conversation with code execution and file return' } }];"
+			},
+			"id": "751eb041-9084-5461-b80f-a81e39253df6",
+			"name": "Passed",
+			"type": "n8n-nodes-base.code",
+			"typeVersion": 2,
+			"position": [1760, 0]
+		}
+	],
+	"connections": {
+		"Start": {
+			"main": [
+				[
+					{
+						"node": "Settings",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Settings": {
+			"main": [
+				[
+					{
+						"node": "Create Conversation",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Create Conversation": {
+			"main": [
+				[
+					{
+						"node": "Send Message",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Send Message": {
+			"main": [
+				[
+					{
+						"node": "Check Answer",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Check Answer": {
+			"main": [
+				[
+					{
+						"node": "Get Messages",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Get Messages": {
+			"main": [
+				[
+					{
+						"node": "Check Messages",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Check Messages": {
+			"main": [
+				[
+					{
+						"node": "Delete Conversation",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Delete Conversation": {
+			"main": [
+				[
+					{
+						"node": "Passed",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		}
+	},
+	"settings": {
+		"executionOrder": "v1"
+	},
+	"pinData": {}
+}

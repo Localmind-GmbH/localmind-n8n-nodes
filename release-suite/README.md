@@ -1,0 +1,70 @@
+# Release test suite
+
+A fixed set of checks against a real Localmind instance. Run it before every release of the package and after every Localmind release that touches the API. The results set the minimum Localmind version stated in the README.
+
+Run it against two instances when you can: one on the newest Localmind release, and one on the development version (`main`). Send Message behaves differently on Localmind up to 1.5.0 (see the README's compatibility table), so both paths get checked.
+
+## Setup
+
+1. **n8n** 2.16 or later, with the package installed from npm or from a tarball made with `npm pack` (see the customer guide's offline installation). Don't use `npm run dev`: it registers the nodes under other type names, so the imported workflows would show unknown nodes.
+2. **Localmind test setup:**
+   - A test space.
+   - A technical user with access to the test space, and an API key for it, limited to the test space.
+   - An agent that has code execution, linked to the test space.
+3. **In n8n:** a credential of type **Localmind API** named `Localmind API`, with the instance's `-api` URL and the key.
+4. Import the workflows below (**Workflows > Import from File**). In each, open the **Settings** node and fill in the IDs. Agent → Get Many and Space → Get Many in any Localmind node list them.
+
+## Automated workflows
+
+Each workflow ends in a Code node that stops with an error when a check fails. A run passes when every node is green.
+
+| Workflow                                    | What it checks                                                                                                                                                                                                                                                                                                                                                                                             |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `01-agent-ask.json`                         | Agent → Ask with JSON output: parsed answer, token usage                                                                                                                                                                                                                                                                                                                                                   |
+| `02-conversation-code-execution-files.json` | Conversation → Create, Send Message with code execution: waits for the answer (also through the sandbox queue when all sandboxes are busy at the time), returns the generated Excel file as binary data under its exact name `Release Check Ü (1).xlsx` (spaces, an umlaut and brackets check that the download link is encoded right on every Localmind version); Get Messages shows it; Delete cleans up |
+| `03-file-upload-search-delete.json`         | File → Upload with a unique marker, waits until indexed; Document → Search finds the passage; Document → Delete removes it through the file manager, and a new search no longer finds it                                                                                                                                                                                                                   |
+| `04-agent-calls-workflow-check.json`        | A Localmind agent calls an n8n workflow through the MCP Server Trigger, once without and once with inputs (needs the manual setup below)                                                                                                                                                                                                                                                                   |
+
+## Manual checks
+
+**Agent calls an n8n workflow (for workflow 4)**
+
+1. In the n8n under test, create a workflow with an **MCP Server Trigger** (path `localmind-release-check`, bearer authentication) and two **Code Tools**: `release_word` with the description "Returns the release word" that returns `LIGHTHOUSE-42`, and `combine_numbers` with the description "Combines two numbers a and b into the release result. Pass both numbers.", an input schema from the example `{"a": 6, "b": 7}` and the code ``return `R-${Number(query.a) * Number(query.b) + 7}`;``. Activate it.
+2. In Localmind, open the test space, go to **Tools**, create a new tool and choose connection type **HTTP** (not "HTTP API") with the trigger's production URL. Under **HTTP Headers**, enter `Authorization` with `Bearer <token>`, tick **Secure** before you click **Add**, and check that the header appears in the list. Attach the tool to an agent in the test space.
+3. Run `04-agent-calls-workflow-check.json` with that agent's ID.
+
+**Generated file as an Outlook attachment (after workflow 2)**
+
+Add a **Microsoft Outlook** node (Send Message) after **Check Answer**, with the attachment taken from the binary field `file_0`, and send it to a test mailbox. Pass: the mail arrives with a readable `Release Check Ü (1).xlsx`.
+
+**Credential**
+
+- Save the credential: the test passes.
+- Change the URL to the instance's `-app` address and save: the test fails with "Use the API host".
+- Use a wrong key: the test fails with "Localmind rejected the API key".
+
+**Localmind Chat Model**
+
+In an AI Agent with a chat trigger and the Localmind Chat Model:
+
+- A plain question gets an answer, streamed in the chat.
+- An image attached in the chat does not reach the agent (n8n's AI node SDK drops it); a PDF attached in the chat is read.
+- With a memory node (for example Simple Memory), a follow-up question refers to the first answer.
+- With a tool connected to the AI Agent, the run stops with "The Localmind Chat Model cannot use tools connected in n8n".
+- With **Require Specific Output Format** and a structured output parser: the answer is parsed (the node asks the agent for JSON in the parser's shape) and no tools error appears.
+
+**Send Message timeout**
+
+Send a long task (for example the message of workflow 2) with **Timeout (Minutes)** set to 1. Pass: the error says what the agent was doing and names the conversation and message IDs.
+
+## Results
+
+Record each run here. The oldest Localmind version on which everything passes is the minimum the README states.
+
+| Date       | Package             | n8n               | Localmind                                                                        | 01   | 02                                                                                                                        | 03   | 04      | Manual                                                                                                                                                                                             | Notes                                                                                                                                  |
+| ---------- | ------------------- | ----------------- | -------------------------------------------------------------------------------- | ---- | ------------------------------------------------------------------------------------------------------------------------- | ---- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-10-26 | 0.1.0 (pre-release) | 2.41.7            | development version (main, 2026-10-20)                                           | pass | pass                                                                                                                      | pass | pass    | credential, Chat Model: pass; Outlook: not run                                                                                                                                                     | Local dev stack; sandbox image built locally                                                                                           |
+| 2026-10-26 | 0.1.0 (pre-release) | 2.16.0            | development version (main, 2026-10-20)                                           | pass | pass                                                                                                                      | pass | pass    | credential: n8n's general messages (the custom ones need 2.34.0); Chat Model: pass without streaming, output parser with streaming fails (documented), no PDF passthrough option; Outlook: not run | Same instance                                                                                                                          |
+| 2026-10-27 | 0.1.0 (pre-release) | 2.41.7 and 2.16.0 | development version (main, 2026-10-20, with the new error format)                | pass | pass                                                                                                                      | pass | pass    | Chat Model without streaming: pass; Outlook: not run                                                                                                                                               | Same build, second run                                                                                                                 |
+| 2026-10-29 | 0.1.0 (pre-release) | 2.41.7 and 2.16.0 | **1.5.0** (local, from the tag)                                                  | pass | sandbox did not start in the local setup; Send Message's waiting path for ≤1.5.0 worked (state 401, then run and history) | pass | not run | –                                                                                                                                                                                                  | The local sandbox image was built for the development version; code execution on 1.5.0 still to be tested on a real 1.5.0 instance     |
+| 2026-11-04 | 0.1.0 (pre-release) | 2.41.7 and 2.16.0 | development version (2026-11-04, after 1.7.0-rc.1: generated-file links encoded) | pass | pass                                                                                                                      | pass | pass    | not run                                                                                                                                                                                            | Workflow 2 with `Release Check Ü (1).xlsx`: the encoded link downloaded on both n8n versions. Run with `n8n execute` in the containers |

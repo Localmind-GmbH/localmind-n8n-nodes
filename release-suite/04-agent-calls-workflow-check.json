@@ -1,0 +1,156 @@
+{
+	"name": "Localmind release check 4: Agent calls an n8n workflow (MCP Server Trigger)",
+	"nodes": [
+		{
+			"parameters": {},
+			"id": "7a9263b9-86d5-5a41-826b-6d9dea4bc941",
+			"name": "Start",
+			"type": "n8n-nodes-base.manualTrigger",
+			"typeVersion": 1,
+			"position": [0, 0]
+		},
+		{
+			"parameters": {
+				"jsCode": "// Fill in the IDs of your test setup, then run the workflow.\nreturn [{ json: {\n    \"agentId\": \"PASTE-ID-OF-THE-AGENT-WITH-THE-MCP-TOOL\",\n    \"expectedWord\": \"LIGHTHOUSE-42\"\n  } }];"
+			},
+			"id": "529e0855-3c26-5b7d-96a2-cb9e56547940",
+			"name": "Settings",
+			"type": "n8n-nodes-base.code",
+			"typeVersion": 2,
+			"position": [220, 0]
+		},
+		{
+			"parameters": {
+				"resource": "agent",
+				"operation": "ask",
+				"agent": {
+					"__rl": true,
+					"mode": "id",
+					"value": "={{ $('Settings').first().json.agentId }}"
+				},
+				"prompt": "Call the release_word tool and reply with exactly the word it returns, nothing else.",
+				"options": {
+					"temperature": 0
+				}
+			},
+			"id": "3798ae11-5900-5905-be38-916b750f68c0",
+			"name": "Ask",
+			"type": "@localmind/n8n-nodes-localmind.localmind",
+			"typeVersion": 1,
+			"position": [440, 0],
+			"credentials": {
+				"localmindApi": {
+					"id": "",
+					"name": "Localmind API"
+				}
+			}
+		},
+		{
+			"parameters": {
+				"jsCode": "const expected = $('Settings').first().json.expectedWord;\nconst answer = $input.first().json.text ?? '';\nif (!answer.includes(expected)) throw new Error(`The agent did not return the tool's word. Answer: ${answer}`);\nreturn [{ json: { answer } }];"
+			},
+			"id": "4b77afe0-8824-578f-8725-ff8724869b37",
+			"name": "Check",
+			"type": "n8n-nodes-base.code",
+			"typeVersion": 2,
+			"position": [660, 0]
+		},
+		{
+			"parameters": {
+				"resource": "agent",
+				"operation": "ask",
+				"agent": {
+					"__rl": true,
+					"mode": "id",
+					"value": "={{ $('Settings').first().json.agentId }}"
+				},
+				"prompt": "Call the combine_numbers tool with a = 6 and b = 7 and reply with exactly what it returns, nothing else.",
+				"options": {
+					"temperature": 0
+				}
+			},
+			"id": "ask-with-input",
+			"name": "Ask With Input",
+			"type": "@localmind/n8n-nodes-localmind.localmind",
+			"typeVersion": 1,
+			"position": [880, 0],
+			"credentials": {
+				"localmindApi": {
+					"id": "",
+					"name": "Localmind API"
+				}
+			}
+		},
+		{
+			"parameters": {
+				"jsCode": "// combine_numbers returns R-<a * b + 7>: only a call with a = 6 and b = 7 gives R-49.\nconst answer = $input.first().json.text ?? '';\nif (!answer.includes('R-49')) throw new Error(`The agent did not pass the inputs to the tool. Answer: ${answer}`);\nreturn [{ json: { passed: 'Agent calls an n8n workflow, also with inputs' } }];"
+			},
+			"name": "Check Input",
+			"type": "n8n-nodes-base.code",
+			"typeVersion": 2,
+			"position": [1100, 0],
+			"id": "check-input"
+		}
+	],
+	"connections": {
+		"Start": {
+			"main": [
+				[
+					{
+						"node": "Settings",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Settings": {
+			"main": [
+				[
+					{
+						"node": "Ask",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Ask": {
+			"main": [
+				[
+					{
+						"node": "Check",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Check": {
+			"main": [
+				[
+					{
+						"node": "Ask With Input",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Ask With Input": {
+			"main": [
+				[
+					{
+						"node": "Check Input",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		}
+	},
+	"settings": {
+		"executionOrder": "v1"
+	},
+	"pinData": {}
+}

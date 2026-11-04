@@ -1,0 +1,294 @@
+{
+	"name": "Localmind release check 3: File upload, search and delete",
+	"nodes": [
+		{
+			"parameters": {},
+			"id": "5ea45aca-0b1c-5a1c-b8fd-05aa423f274c",
+			"name": "Start",
+			"type": "n8n-nodes-base.manualTrigger",
+			"typeVersion": 1,
+			"position": [0, 0]
+		},
+		{
+			"parameters": {
+				"jsCode": "// Fill in the IDs of your test setup, then run the workflow.\nreturn [{ json: {\n    \"spaceId\": \"PASTE-SPACE-ID\",\n    \"folder\": \"release-check\"\n  } }];"
+			},
+			"id": "9cda9b0d-7be8-5369-9f47-eb4a3acdba40",
+			"name": "Settings",
+			"type": "n8n-nodes-base.code",
+			"typeVersion": 2,
+			"position": [220, 0]
+		},
+		{
+			"parameters": {
+				"jsCode": "const marker = `lighthouse-${Date.now()}`;\nconst text = `Release check document.\\nThe harbour code word for this run is ${marker}.\\n`;\nreturn [{\n  json: { marker },\n  binary: {\n    data: {\n      data: Buffer.from(text).toString('base64'),\n      mimeType: 'text/plain',\n      fileName: `${marker}.txt`,\n    },\n  },\n}];"
+			},
+			"id": "091847c3-17d8-5f65-82bf-4681083eb64f",
+			"name": "Make Test File",
+			"type": "n8n-nodes-base.code",
+			"typeVersion": 2,
+			"position": [440, 0]
+		},
+		{
+			"parameters": {
+				"resource": "file",
+				"operation": "upload",
+				"space": {
+					"__rl": true,
+					"mode": "id",
+					"value": "={{ $('Settings').first().json.spaceId }}"
+				},
+				"binaryPropertyName": "data",
+				"folder": "={{ $('Settings').first().json.folder }}",
+				"options": {
+					"waitForProcessing": true,
+					"timeoutMinutes": 10
+				}
+			},
+			"id": "daaceba5-e708-5ecb-a5ac-884564e0c902",
+			"name": "Upload",
+			"type": "@localmind/n8n-nodes-localmind.localmind",
+			"typeVersion": 1,
+			"position": [660, 0],
+			"credentials": {
+				"localmindApi": {
+					"id": "",
+					"name": "Localmind API"
+				}
+			}
+		},
+		{
+			"parameters": {
+				"jsCode": "const result = $input.first().json;\nif (!result.documentId || result.status !== 'completed') {\n  throw new Error(`Upload not indexed: ${JSON.stringify(result)}`);\n}\nreturn [{ json: result }];"
+			},
+			"id": "2bed8f97-7bd7-52fc-91fc-33975feb30a7",
+			"name": "Check Upload",
+			"type": "n8n-nodes-base.code",
+			"typeVersion": 2,
+			"position": [880, 0]
+		},
+		{
+			"parameters": {
+				"resource": "document",
+				"operation": "search",
+				"space": {
+					"__rl": true,
+					"mode": "id",
+					"value": "={{ $('Settings').first().json.spaceId }}"
+				},
+				"query": "={{ $('Make Test File').first().json.marker }}",
+				"limit": 5,
+				"options": {
+					"folders": "={{ $('Settings').first().json.folder }}"
+				}
+			},
+			"id": "8f2282ff-a653-50f8-bfda-751d5dfae3e5",
+			"name": "Search",
+			"type": "@localmind/n8n-nodes-localmind.localmind",
+			"typeVersion": 1,
+			"position": [1100, 0],
+			"credentials": {
+				"localmindApi": {
+					"id": "",
+					"name": "Localmind API"
+				}
+			}
+		},
+		{
+			"parameters": {
+				"jsCode": "const documentId = $('Upload').first().json.documentId;\nconst marker = $('Make Test File').first().json.marker;\nconst hit = $input.all().map((item) => item.json).find((result) => result.documentId === documentId);\nif (!hit) throw new Error('Search did not find the uploaded document (indexing may need a moment; run again)');\nif (!hit.text?.includes(marker)) throw new Error('The found passage does not contain the marker');\nreturn [{ json: hit }];"
+			},
+			"id": "a7e40e87-d77a-5399-86c7-f3a0fe4ecb62",
+			"name": "Check Search",
+			"type": "n8n-nodes-base.code",
+			"typeVersion": 2,
+			"position": [1320, 0]
+		},
+		{
+			"parameters": {
+				"resource": "document",
+				"operation": "delete",
+				"document": {
+					"__rl": true,
+					"mode": "id",
+					"value": "={{ $('Upload').first().json.documentId }}"
+				}
+			},
+			"id": "350f74bb-5be9-56a8-9326-36daa65f7d09",
+			"name": "Delete Document",
+			"type": "@localmind/n8n-nodes-localmind.localmind",
+			"typeVersion": 1,
+			"position": [1540, 0],
+			"credentials": {
+				"localmindApi": {
+					"id": "",
+					"name": "Localmind API"
+				}
+			}
+		},
+		{
+			"parameters": {
+				"jsCode": "const result = $input.first().json;\nif (!result.deleted || !result.path) throw new Error(`Not deleted through the file manager: ${JSON.stringify(result)}`);\nreturn [{ json: result }];"
+			},
+			"id": "57ccd8d3-62db-5e77-9a09-8a5b95e2e12d",
+			"name": "Check Delete",
+			"type": "n8n-nodes-base.code",
+			"typeVersion": 2,
+			"position": [1760, 0]
+		},
+		{
+			"parameters": {
+				"resource": "document",
+				"operation": "search",
+				"space": {
+					"__rl": true,
+					"mode": "id",
+					"value": "={{ $('Settings').first().json.spaceId }}"
+				},
+				"query": "={{ $('Make Test File').first().json.marker }}",
+				"limit": 5,
+				"options": {
+					"folders": "={{ $('Settings').first().json.folder }}"
+				}
+			},
+			"id": "8f2282ff-a653-50f8-bfda-751d5dfae3e5-again",
+			"name": "Search Again",
+			"type": "@localmind/n8n-nodes-localmind.localmind",
+			"typeVersion": 1,
+			"position": [1980, 0],
+			"credentials": {
+				"localmindApi": {
+					"id": "",
+					"name": "Localmind API"
+				}
+			},
+			"alwaysOutputData": true
+		},
+		{
+			"parameters": {
+				"jsCode": "const documentId = $('Upload').first().json.documentId;\nconst left = $input.all().map((item) => item.json).filter((result) => result.documentId === documentId);\nif (left.length) throw new Error('Search still finds the deleted document');\nreturn [{ json: { passed: 'File upload, search and delete', path: $('Delete Document').first().json.path } }];"
+			},
+			"name": "Check Gone",
+			"type": "n8n-nodes-base.code",
+			"typeVersion": 2,
+			"position": [2200, 0],
+			"id": "check-gone"
+		}
+	],
+	"connections": {
+		"Start": {
+			"main": [
+				[
+					{
+						"node": "Settings",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Settings": {
+			"main": [
+				[
+					{
+						"node": "Make Test File",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Make Test File": {
+			"main": [
+				[
+					{
+						"node": "Upload",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Upload": {
+			"main": [
+				[
+					{
+						"node": "Check Upload",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Check Upload": {
+			"main": [
+				[
+					{
+						"node": "Search",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Search": {
+			"main": [
+				[
+					{
+						"node": "Check Search",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Check Search": {
+			"main": [
+				[
+					{
+						"node": "Delete Document",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Delete Document": {
+			"main": [
+				[
+					{
+						"node": "Check Delete",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Check Delete": {
+			"main": [
+				[
+					{
+						"node": "Search Again",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Search Again": {
+			"main": [
+				[
+					{
+						"node": "Check Gone",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		}
+	},
+	"settings": {
+		"executionOrder": "v1"
+	},
+	"pinData": {}
+}

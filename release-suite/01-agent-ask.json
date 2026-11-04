@@ -1,0 +1,99 @@
+{
+	"name": "Localmind release check 1: Agent → Ask",
+	"nodes": [
+		{
+			"parameters": {},
+			"id": "e3787ad8-1d36-5036-9897-351d0082f249",
+			"name": "Start",
+			"type": "n8n-nodes-base.manualTrigger",
+			"typeVersion": 1,
+			"position": [0, 0]
+		},
+		{
+			"parameters": {
+				"jsCode": "// Fill in the IDs of your test setup, then run the workflow.\nreturn [{ json: {\n    \"agentId\": \"PASTE-AGENT-ID\"\n  } }];"
+			},
+			"id": "2fb6cfae-5b2b-50d6-a4bd-6e28b3ec1c23",
+			"name": "Settings",
+			"type": "n8n-nodes-base.code",
+			"typeVersion": 2,
+			"position": [220, 0]
+		},
+		{
+			"parameters": {
+				"resource": "agent",
+				"operation": "ask",
+				"agent": {
+					"__rl": true,
+					"mode": "id",
+					"value": "={{ $('Settings').first().json.agentId }}"
+				},
+				"prompt": "Reply with a JSON object only: {\"status\": \"ok\", \"sum\": <the sum of 17 and 25 as a number>}",
+				"options": {
+					"jsonOutput": true,
+					"temperature": 0
+				}
+			},
+			"id": "202b2bf6-a037-5b96-9582-01eceee45f9c",
+			"name": "Ask",
+			"type": "@localmind/n8n-nodes-localmind.localmind",
+			"typeVersion": 1,
+			"position": [440, 0],
+			"credentials": {
+				"localmindApi": {
+					"id": "",
+					"name": "Localmind API"
+				}
+			}
+		},
+		{
+			"parameters": {
+				"jsCode": "const result = $input.first().json;\nif (result.output?.status !== 'ok' || result.output?.sum !== 42) {\n  throw new Error(`Unexpected answer: ${JSON.stringify(result.output ?? result.text)}`);\n}\nif (!(result.tokens?.total > 0)) throw new Error('No token usage reported');\nreturn [{ json: { passed: 'Agent → Ask', tokens: result.tokens } }];"
+			},
+			"id": "bf63fe8c-68b8-5034-8cc6-48c89a27c0ae",
+			"name": "Check",
+			"type": "n8n-nodes-base.code",
+			"typeVersion": 2,
+			"position": [660, 0]
+		}
+	],
+	"connections": {
+		"Start": {
+			"main": [
+				[
+					{
+						"node": "Settings",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Settings": {
+			"main": [
+				[
+					{
+						"node": "Ask",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Ask": {
+			"main": [
+				[
+					{
+						"node": "Check",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		}
+	},
+	"settings": {
+		"executionOrder": "v1"
+	},
+	"pinData": {}
+}

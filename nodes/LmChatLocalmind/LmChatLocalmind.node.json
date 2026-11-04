@@ -1,0 +1,22 @@
+{
+	"node": "@localmind/n8n-nodes-localmind.lmChatLocalmind",
+	"nodeVersion": "1.0",
+	"codexVersion": "1.0",
+	"categories": ["Productivity"],
+	"subcategories": {
+		"AI": ["Language Models", "Root Nodes"],
+		"Language Models": ["Chat Models (Recommended)"]
+	},
+	"resources": {
+		"credentialDocumentation": [
+			{
+				"url": "https://www.npmjs.com/package/@localmind/n8n-nodes-localmind#credentials"
+			}
+		],
+		"primaryDocumentation": [
+			{
+				"url": "https://www.npmjs.com/package/@localmind/n8n-nodes-localmind#localmind-chat-model"
+			}
+		]
+	}
+}

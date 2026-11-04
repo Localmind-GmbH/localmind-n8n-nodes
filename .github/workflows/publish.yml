@@ -1,0 +1,125 @@
+# Publishes the package to npm with a provenance statement on every version tag, then
+# attaches the published package with a signed attestation to a GitHub release.
+# n8n requires provenance for verified community nodes. Provenance proves that the
+# package was built by this workflow, from this repository and commit.
+#
+# One-time setup on GitHub:
+#   Settings > Environments > "npm-publish": required reviewers (a second maintainer
+#   approves every publish), "Prevent self-review", deployment tags limited to "v*.*.*".
+#   Settings > Rules > a tag ruleset for "v*.*.*": only maintainers may create, update
+#   or delete version tags.
+#
+# One-time setup on npmjs.com (trusted publishing, no long-lived token):
+#   Package settings > Trusted Publishers > GitHub Actions: repository owner and name
+#   of this repository, workflow "publish.yml", environment "npm-publish".
+#   A trusted publisher can only be added to a package that exists: publish the
+#   first version with an npm token. Add it as the secret NPM_TOKEN of the
+#   "npm-publish" environment (granular access token with publish rights and a short
+#   expiry), push the first tag, then add the trusted publisher, delete the secret and
+#   revoke the token. Then set Publishing access to "Require two-factor authentication
+#   and disallow tokens".
+#   package.json's repository.url must name this GitHub repository for provenance.
+#
+# Release: update CHANGELOG.md, then `npm version <major|minor|patch>` and
+# `git push --follow-tags`; the tag starts this workflow (see RELEASING.md).
+# Do not run `npm run release` locally: it rewrites CHANGELOG.md with auto-changelog.
+
+name: Publish
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+# One release at a time; a running publish is never cancelled.
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # Waits for a reviewer's approval; only version tags may deploy to this environment.
+    environment: npm-publish
+    permissions:
+      id-token: write # OIDC token for npm trusted publishing and provenance
+      contents: read
+    outputs:
+      package: ${{ steps.version.outputs.package }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          # Trusted publishing needs npm 11.5.1 or later, which Node 24 ships.
+          node-version: 24
+          # No dependency cache in a release: a poisoned cache could change what is published.
+          package-manager-cache: false
+
+      - name: Check that the tag matches the package version
+        id: version
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match version $version in package.json"
+            exit 1
+          fi
+          echo "package=$(node -p "require('./package.json').name")@$version" >> "$GITHUB_OUTPUT"
+
+      - run: npm ci
+      # Fails when a dependency's registry signature or attestation does not verify.
+      - run: npm audit signatures
+      - run: npm run typecheck
+      - run: npm test
+      # Lints, builds and publishes with provenance; prepublishOnly checks the package
+      # contents right before the upload. With the NPM_TOKEN secret set (first publish
+      # only) the token is used; without it, trusted publishing.
+      - run: |
+          [ -n "$NPM_TOKEN" ] && npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
+          npm run release
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  github-release:
+    # The package exactly as npm serves it, for installations without npm access.
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release
+      id-token: write # sign the attestation
+      attestations: write # store the attestation
+    steps:
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Download the published package
+        env:
+          PACKAGE: ${{ needs.publish.outputs.package }}
+        run: |
+          # The registry can take a moment to serve a new version. npm checks the
+          # download against the integrity the registry recorded at publishing.
+          for attempt in 1 2 3 4 5 6; do
+            npm pack "$PACKAGE" && break
+            [ "$attempt" = 6 ] && exit 1
+            sleep 10
+          done
+          sha256sum -- *.tgz > SHA256SUMS
+
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: '*.tgz'
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          file=$(ls -- *.tgz)
+          gh release create "$GITHUB_REF_NAME" "$file" SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --title "$GITHUB_REF_NAME" \
+            --notes "The package as published on npm, for installation without npm access (customer guide, offline installation). Verify it before installing: \`gh attestation verify $file --repo $GITHUB_REPOSITORY\`, or compare its SHA-256 with SHA256SUMS. Changes: see CHANGELOG.md."
