@@ -21,7 +21,7 @@ import {
 	parseRetryAfter,
 	retryDelay,
 } from './retry';
-import { apiUrlForAppHost, normalizeBaseUrl } from './url';
+import { apiUrlForAppHost, isEncryptedOrLocalUrl, normalizeBaseUrl } from './url';
 
 export const CREDENTIAL_TYPE = 'localmindApi';
 
@@ -68,21 +68,43 @@ export interface Page<T> {
 
 const MAX_PAGE_SIZE = 200;
 
+/** 'Return All' reads at most this many pages, 200,000 results at the maximum page size. */
+const MAX_PAGES = 1000;
+
+/** An error answer is read up to this size; an error message never needs more. */
+const MAX_ERROR_BODY_BYTES = 64 * 1024;
+
 async function readStream(body: unknown): Promise<string> {
 	const chunks: Buffer[] = [];
+	let size = 0;
 	for await (const chunk of body as AsyncIterable<Buffer | string>) {
-		chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+		const bytes = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+		chunks.push(bytes);
+		size += bytes.length;
+		// Leaving the loop closes the stream.
+		if (size >= MAX_ERROR_BODY_BYTES) break;
 	}
-	return Buffer.concat(chunks).toString('utf8');
+	return Buffer.concat(chunks).subarray(0, MAX_ERROR_BODY_BYTES).toString('utf8');
 }
 
 /** The body of a failed response, decoded when it arrived as a stream or as bytes. */
 async function errorBody(response: IN8nHttpFullResponse, streamed: boolean): Promise<unknown> {
 	let text: string | undefined;
-	if (streamed) text = await readStream(response.body);
-	else if (Buffer.isBuffer(response.body)) text = response.body.toString('utf8');
+	try {
+		if (streamed) text = await readStream(response.body);
+		else if (Buffer.isBuffer(response.body)) {
+			text = response.body.subarray(0, MAX_ERROR_BODY_BYTES).toString('utf8');
+		}
+	} catch {
+		// Reading failed, for example because the execution was stopped. That error still holds
+		// the request with the Authorization header, so it is not passed on.
+		return undefined;
+	}
 	return text === undefined ? response.body : jsonParse<unknown>(text, { fallbackValue: text });
 }
+
+/** At most this many characters of Localmind's error text reach the node's error. */
+const MAX_DETAIL_LENGTH = 1000;
 
 /** The error a node shows for a failed Localmind request: "Localmind: <detail>" plus the HTTP status. */
 export function localmindError(
@@ -92,10 +114,15 @@ export function localmindError(
 	baseUrl: string,
 	itemIndex?: number,
 ): NodeApiError {
-	const detail = errorDetail(body) ?? response.statusMessage ?? `HTTP ${response.statusCode}`;
+	const fullDetail = errorDetail(body) ?? response.statusMessage ?? `HTTP ${response.statusCode}`;
+	const detail =
+		fullDetail.length > MAX_DETAIL_LENGTH
+			? `${fullDetail.slice(0, MAX_DETAIL_LENGTH)}…`
+			: fullDetail;
 	const apiUrl = response.statusCode === 404 ? apiUrlForAppHost(baseUrl) : undefined;
-	const errorResponse =
-		typeof body === 'object' && body !== null ? (body as JsonObject) : { message: detail };
+	// A flat summary, not the answer itself: n8n's error class searches the whole answer for a
+	// message, and on a deeply nested one that blocks n8n for seconds to minutes (2.41 and later).
+	const errorResponse: JsonObject = { message: detail };
 	let description: string | undefined;
 	if (apiUrl) {
 		description = `The credential's API URL points to the Localmind app, which does not serve the API. Use the API host instead: ${apiUrl}`;
@@ -137,6 +164,19 @@ async function send(
 		);
 	}
 	const { url } = await this.getCredentials<LocalmindCredentials>(CREDENTIAL_TYPE);
+	// The credential already withholds the key from such a URL; this says why nothing works.
+	if (!isEncryptedOrLocalUrl(url)) {
+		throw new NodeApiError(
+			this.getNode(),
+			{ message: 'The API URL does not use https' },
+			{
+				message: 'Localmind: the API URL must use https',
+				description:
+					"Plain http would carry the API key and all data unencrypted, so it is allowed only for this machine (localhost, *.localhost, 127.0.0.1). Change the credential's API URL to an https:// address.",
+				itemIndex: request.itemIndex,
+			},
+		);
+	}
 	const idempotent = request.idempotent ?? !['POST', 'PATCH'].includes(request.method);
 	const streamed = extra.encoding === 'stream';
 	// n8n drops an empty object body; endpoints that require a body would answer 422.
@@ -342,5 +382,20 @@ export async function localmindApiRequestAllItems<T>(
 		items.push(...result.items);
 		if (limit !== undefined && items.length >= limit) return items.slice(0, limit);
 		if (result.items.length === 0 || page >= result.total_pages) return items;
+		// Return All trusts the page count Localmind reports; a wrong one must not fill the memory.
+		if (page >= MAX_PAGES) {
+			throw new NodeApiError(
+				this.getNode(),
+				{ message: 'Too many pages' },
+				{
+					message: `Localmind: more than ${MAX_PAGES * pageSize} results`,
+					description:
+						limit === undefined
+							? "Turn off 'Return All' and set a 'Limit', or narrow the request."
+							: "Set a lower 'Limit', or narrow the request.",
+					itemIndex: request.itemIndex,
+				},
+			);
+		}
 	}
 }

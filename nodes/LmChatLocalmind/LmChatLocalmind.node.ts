@@ -119,6 +119,7 @@ export class LmChatLocalmind implements INodeType {
 						body: { ...body },
 						timeout,
 					}),
+				streamTimeoutMs: timeout,
 			},
 			{ maxTokens: options.maxTokens, temperature: options.temperature },
 		);

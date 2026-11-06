@@ -24,6 +24,7 @@ import {
 } from '../shared/errors';
 import { isAcceptedImage } from '../shared/files';
 import { parseJsonAnswer } from '../shared/json';
+import { durationText } from '../shared/polling';
 
 type ChatContentPart =
 	| { type: 'text'; text: string }
@@ -70,6 +71,19 @@ interface ChatCompletionChunk {
 export interface LocalmindChatRequests {
 	complete(body: ChatCompletionRequest): Promise<ChatCompletionResponse>;
 	stream(body: ChatCompletionRequest): Promise<AsyncIterableIterator<Buffer | Uint8Array>>;
+	/**
+	 * How long a streamed answer may take in total. The request's own timeout ends once the first
+	 * data arrives, so a stream that stalls afterwards would otherwise stay open until cancelled.
+	 */
+	streamTimeoutMs?: number;
+}
+
+/** Settles after `ms`; its timer does not keep n8n running. */
+function expiry(ms: number): Promise<'expired'> {
+	const signal = AbortSignal.timeout(ms);
+	return new Promise((resolve) => {
+		signal.addEventListener('abort', () => resolve('expired'), { once: true });
+	});
 }
 
 /** The tool n8n's AI Agent adds for an output parser ("Require Specific Output Format"). */
@@ -173,18 +187,29 @@ function outputFormatInstruction(tool: Tool): string {
 		: 'Respond only with a JSON object.';
 }
 
+/** Waits for a promise to settle, ignoring how. */
+const settled = async (promise: Promise<unknown> | undefined) => {
+	try {
+		await promise;
+	} catch {
+		// Already closed.
+	}
+};
+
 /** Ends reading a response stream and releases its connection; errors while closing are ignored. */
 async function closeStream(
 	events: AsyncIterator<unknown>,
 	body: AsyncIterator<unknown>,
 ): Promise<void> {
+	// The connection first: a read still waiting for data ends with it, and so does the parser.
 	try {
-		await events.return?.();
-		await body.return?.();
 		(body as { destroy?: () => void }).destroy?.();
 	} catch {
 		// Already closed.
 	}
+	await settled(body.return?.());
+	// The parser stops only once its pending read ends; never let a stuck one hang the node.
+	await Promise.race([settled(events.return?.()), expiry(1000)]);
 }
 
 /** A message of the chat other than a tool result. */
@@ -263,9 +288,11 @@ export class LocalmindChatModel extends BaseChatModel {
 		let sawText = false;
 		let streamId: string | undefined;
 		const events = parseSSEStream(body)[Symbol.asyncIterator]();
+		const timeoutMs = this.requests.streamTimeoutMs;
+		const expired = timeoutMs === undefined ? undefined : expiry(timeoutMs);
 		try {
 			for (;;) {
-				const next = await this.nextEvent(events);
+				const next = await this.nextEvent(events, expired, timeoutMs);
 				// After [DONE] Localmind may keep the connection open while it cleans up the sandbox.
 				if (next.done || next.value.data === '[DONE]') break;
 				if (!next.value.data) continue;
@@ -401,10 +428,29 @@ export class LocalmindChatModel extends BaseChatModel {
 		return { role: 'user', content: parts };
 	}
 
-	/** The next server-sent event; a connection that breaks off becomes a clear error. */
-	private async nextEvent<T>(events: AsyncIterator<T>): Promise<IteratorResult<T>> {
+	/** The next server-sent event; a connection that breaks off or runs out of time becomes a clear error. */
+	private async nextEvent<T>(
+		events: AsyncIterator<T>,
+		expired?: Promise<'expired'>,
+		timeoutMs?: number,
+	): Promise<IteratorResult<T>> {
+		const pending = events.next();
+		if (expired) {
+			// Closing the stream afterwards ends the read that is still waiting.
+			pending.catch(() => undefined);
+			if ((await Promise.race([pending.catch(() => 'failed' as const), expired])) === 'expired') {
+				throw new NodeOperationError(
+					this.node,
+					`No answer from Localmind within ${durationText(timeoutMs ?? 0)}`,
+					{
+						description:
+							'The answer stream stayed open without finishing. Localmind stops an answer after 10 minutes; check the agent in the Localmind app.',
+					},
+				);
+			}
+		}
 		try {
-			return await events.next();
+			return await pending;
 		} catch (error) {
 			throw new NodeOperationError(this.node, 'The answer stream from Localmind broke off', {
 				description: `${(error as Error).message || 'The connection closed'}. No data arrived within the timeout, or the connection dropped. Localmind stops an answer after 10 minutes.`,

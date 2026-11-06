@@ -271,6 +271,37 @@ function settle(
 	return answer;
 }
 
+/**
+ * How many runs one message may move through. A turn that waits for a code-execution slot more
+ * than once gets a new run each time, so a few are normal; a server that keeps naming new runs
+ * would otherwise keep the node polling without pause.
+ */
+const MAX_RUNS_PER_TURN = 50;
+
+/**
+ * Notes the run that resumed the turn, unless the run limit is reached. No timeout check here: the
+ * last poll comes right at the deadline, and a run it finds may already hold the answer.
+ */
+function followRun(
+	this: IExecuteFunctions,
+	turn: QueuedTurn,
+	checkedRuns: Set<string>,
+	runId: string,
+	itemIndex: number,
+): void {
+	checkedRuns.add(runId);
+	if (checkedRuns.size > MAX_RUNS_PER_TURN) {
+		throw new NodeOperationError(
+			this.getNode(),
+			`Localmind named more than ${MAX_RUNS_PER_TURN} runs for this message`,
+			{
+				itemIndex,
+				description: `Check the answer with Conversation → Get Messages (conversation ${turn.conversation_id}, message ${turn.user_message_id}) before sending the message again.`,
+			},
+		);
+	}
+}
+
 /** Waits until a run has finished and returns its record. */
 async function waitForRun(
 	this: IExecuteFunctions,
@@ -390,7 +421,7 @@ async function waitWithoutState(
 		// These versions cannot show whether a run still works on the turn: wait until the timeout.
 		if (progress.kind === 'done') return settle.call(this, run, answer, itemIndex);
 		if (progress.kind === 'resumedBy') {
-			checkedRuns.add(progress.runId);
+			followRun.call(this, turn, checkedRuns, progress.runId, itemIndex);
 			run = await waitForRun.call(this, turn, progress.runId, deadline, itemIndex);
 			continue;
 		}
@@ -464,8 +495,8 @@ export async function waitForAnswer(
 					return settle.call(this, run, answer, itemIndex);
 				}
 				if (progress.kind === 'resumedBy') {
+					followRun.call(this, turn, checkedRuns, progress.runId, itemIndex);
 					runId = progress.runId;
-					checkedRuns.add(runId);
 					continue;
 				}
 				phase = phaseOfProgress(progress);

@@ -2,3 +2,11 @@ dist
 node_modules
 *.tgz
 *.tar.gz
+
+# Secrets and local files must never be committed.
+.env
+.env.*
+!.env.example
+.npmrc
+*.log
+coverage

@@ -475,3 +475,47 @@ describe('LocalmindChatModel.stream with an output parser', () => {
 		]);
 	});
 });
+
+describe('LocalmindChatModel.stream when the stream stalls', () => {
+	it('stops at the timeout and closes the stream', async () => {
+		let closed = false;
+		const stalled: AsyncIterableIterator<Buffer> = {
+			[Symbol.asyncIterator]() {
+				return this;
+			},
+			sent: false,
+			async next() {
+				if (!(this as { sent: boolean }).sent) {
+					(this as { sent: boolean }).sent = true;
+					return { done: false, value: Buffer.from(sseChunk('Let me think')) };
+				}
+				// No more data, but the connection stays open.
+				return await new Promise<IteratorResult<Buffer>>(() => undefined);
+			},
+			async return() {
+				closed = true;
+				return { done: true, value: undefined };
+			},
+		} as AsyncIterableIterator<Buffer> & { sent: boolean };
+		const model = new LocalmindChatModel(AGENT_ID, node, {
+			complete: vi.fn(),
+			stream: async () => stalled,
+			streamTimeoutMs: 50,
+		});
+
+		const started = Date.now();
+		await expect(collect(model.stream([userMessage('Hi')]))).rejects.toMatchObject({
+			message: 'No answer from Localmind within 1 second(s)',
+		});
+		expect(Date.now() - started).toBeLessThan(2000);
+		expect(closed).toBe(true);
+	});
+
+	it('keeps streaming without a limit when none is set', async () => {
+		const { model } = modelAnswering({}, sseChunk('Hello', 'stop'), 'data: [DONE]\n\n');
+
+		await expect(collect(model.stream([userMessage('Hi')]))).resolves.toContainEqual(
+			expect.objectContaining({ type: 'text-delta', delta: 'Hello' }),
+		);
+	});
+});

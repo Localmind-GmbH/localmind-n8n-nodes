@@ -6,6 +6,17 @@ import type {
 	INodeProperties,
 } from 'n8n-workflow';
 
+import { ENCRYPTED_OR_LOCAL_URL } from '../nodes/shared/url';
+
+/** True in an n8n expression when the API key may be sent to the credential's URL. */
+const KEY_ALLOWED = `${ENCRYPTED_OR_LOCAL_URL.toString()}.test($credentials.url.trim())`;
+
+/**
+ * Where the credential test goes when the URL is plain http to another host: a reserved name
+ * that never resolves, so the test fails before any request, and the key goes nowhere.
+ */
+const REFUSED_TEST_URL = 'https://plain-http-is-only-allowed-for-localhost.invalid';
+
 export class LocalmindApi implements ICredentialType {
 	name = 'localmindApi';
 
@@ -24,7 +35,7 @@ export class LocalmindApi implements ICredentialType {
 			default: '',
 			placeholder: 'e.g. https://acme-api.example.com',
 			description:
-				'The API address of your Localmind instance: the host ending in "-api", not the app host ending in "-app". A trailing /v1 is ignored.',
+				'The API address of your Localmind instance: the host ending in "-api", not the app host ending in "-app". It must start with https://; plain http:// works only for this machine (localhost). A trailing /v1 is ignored.',
 		},
 		{
 			displayName: 'API Key',
@@ -42,7 +53,8 @@ export class LocalmindApi implements ICredentialType {
 		type: 'generic',
 		properties: {
 			headers: {
-				Authorization: '=Bearer {{$credentials.apiKey}}',
+				// Never to a plain-http URL of another host, whatever uses this credential.
+				Authorization: `={{ ${KEY_ALLOWED} ? "Bearer " + $credentials.apiKey : "" }}`,
 			},
 		},
 	};
@@ -50,7 +62,7 @@ export class LocalmindApi implements ICredentialType {
 	// Lists the agents the key can use. An "-app" host answers API paths with an HTML 404.
 	test: ICredentialTestRequest = {
 		request: {
-			baseURL: '={{ $credentials.url.trim().replace(/\\/+$/, "").replace(/\\/v1$/i, "") }}',
+			baseURL: `={{ ${KEY_ALLOWED} ? $credentials.url.trim().replace(/\\/+$/, "").replace(/\\/v1$/i, "") : "${REFUSED_TEST_URL}" }}`,
 			url: '/v1/models',
 			// n8n would send the key along to whatever host a redirect points to.
 			disableFollowRedirect: true,

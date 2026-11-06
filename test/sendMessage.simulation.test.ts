@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { executeConversation } from '../nodes/Localmind/resources/conversation/execute';
 import { waitForAnswer } from '../nodes/Localmind/resources/conversation/sendMessage';
+import { API } from './fakeConversation';
 import { routedContext } from './helpers';
 import { FINAL, simulatedLocalmind, type Scenario } from './simulatedLocalmind';
 
@@ -255,5 +256,88 @@ describe('Get Messages status on current Localmind with another turn in the conv
 
 		expect(messages.x1).toMatchObject({ status: 'complete' });
 		expect(messages.a1).toMatchObject({ status: 'in progress' });
+	});
+});
+
+describe('Send Message against a server that keeps naming new runs', () => {
+	/** Every run is finished, and every read of the answer names a run the node has not seen. */
+	function hostileLocalmind(stateEndpoint: boolean) {
+		let reads = 0;
+		let requests = 0;
+		const messages = () => {
+			reads++;
+			return [
+				{ id: 'u1', role: 'user', content: 'Build the report', parent_message_id: null },
+				{
+					id: 'a1',
+					role: 'assistant',
+					content: 'Working…',
+					parent_message_id: 'u1',
+					metadata: { run_id: `r${reads + 1}` },
+				},
+			];
+		};
+		const route = (options: { url: string; qs?: Record<string, unknown> }) => {
+			requests++;
+			if (options.url === `${API}/conversations/c1/state`) {
+				if (!stateEndpoint) return { statusCode: 401, body: { detail: 'Not for API keys' } };
+				return {
+					body: options.qs?.include_messages
+						? { messages: messages() }
+						: { active_run_id: null, run_status: null, sandbox_queue: null },
+				};
+			}
+			if (options.url === `${API}/conversations/c1/messages`) {
+				return { body: { messages: messages() } };
+			}
+			if (/\/pipeline\/[^/]+$/.test(options.url)) {
+				return { body: { status: 'COMPLETED', result_data: { sandbox_queued: false } } };
+			}
+			return undefined;
+		};
+		return { route, requests: () => requests };
+	}
+
+	it.each([
+		{ version: 'Localmind up to 1.5.0', stateEndpoint: false },
+		{ version: 'current Localmind', stateEndpoint: true },
+	])('stops after a bounded number of requests on $version', async ({ stateEndpoint }) => {
+		const hostile = hostileLocalmind(stateEndpoint);
+		const { context } = routedContext(hostile.route);
+
+		await expect(waitForAnswer.call(context, turn, FIFTEEN_MINUTES, 0)).rejects.toMatchObject({
+			message: 'Localmind named more than 50 runs for this message',
+		});
+		expect(hostile.requests()).toBeLessThan(250);
+	});
+
+	it('also stops at the run limit when the time is already up', async () => {
+		const hostile = hostileLocalmind(true);
+		const { context } = routedContext(hostile.route);
+
+		// The run limit, not the timeout, ends it: a run found at the deadline may hold the answer.
+		await expect(waitForAnswer.call(context, turn, 0, 0)).rejects.toMatchObject({
+			message: 'Localmind named more than 50 runs for this message',
+		});
+		expect(hostile.requests()).toBeLessThan(250);
+	});
+});
+
+describe('Send Message when the resumed turn finishes just before the timeout', () => {
+	it.each([
+		{ version: 'Localmind up to 1.5.0', stateEndpoint: false },
+		{ version: 'current Localmind', stateEndpoint: true },
+	])('returns the answer, not a timeout, on $version', async ({ stateEndpoint }) => {
+		const result = await wait({
+			stateEndpoint,
+			...parked,
+			resume: {
+				firstSaveAt: parked.parkedUntil + 30_000,
+				endsAt: FIFTEEN_MINUTES - 1_000,
+				outcome: 'COMPLETED',
+			},
+		});
+
+		expect(result).toMatchObject({ content: FINAL, metadata: { run_id: 'r2' } });
 	});
 });

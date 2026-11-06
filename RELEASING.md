@@ -11,9 +11,12 @@ Releases are published by GitHub Actions (`.github/workflows/publish.yml`) with 
 1. Run the [release suite](release-suite/) against Localmind and record the result.
 2. In `CHANGELOG.md`, turn **Unreleased** into the new version with today's date.
 3. `npm version <major|minor|patch> -m "Release %s"` bumps the version, commits and tags.
-4. `git push --follow-tags`. The tag starts the workflow. After a second maintainer approves it, the workflow tests, lints and builds, checks the package contents and publishes. It then attaches the published package with a signed attestation and its SHA-256 to a GitHub release, for customers who install without npm access.
+4. `git push --follow-tags`. The tag starts the workflow:
+   - **build** tests, lints and builds, checks the package contents and packs the package. It has no publishing rights, so the dev tools it installs never see an npm token.
+   - **publish** waits for a second maintainer's approval, then publishes exactly the packed file, checked by its SHA-256. It installs nothing. The packed file is kept for 30 days; if the approval comes later, run the workflow again.
+   - **github-release** checks that npm serves that same file, then attaches it with a signed attestation and its SHA-256 to a GitHub release, for customers who install without npm access.
 
-Do not run `npm run release` on your machine: there it runs release-it with auto-changelog, which rewrites the hand-written `CHANGELOG.md` from the commits. In GitHub Actions the same command only lints, builds and publishes.
+Do not run `npm run release` on your machine: it runs release-it with auto-changelog, which rewrites the hand-written `CHANGELOG.md` from the commits. The workflow does not use it.
 
 ## Before the first publish
 

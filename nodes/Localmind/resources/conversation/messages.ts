@@ -1,7 +1,12 @@
 import type { IDataObject } from 'n8n-workflow';
 
 import { SANDBOX_BUSY_MESSAGE, stepLimitMessage } from '../../../shared/errors';
-import { generatedFilePath, specificMimeType, type GeneratedFile } from '../../../shared/files';
+import {
+	fileDetails,
+	generatedFilePath,
+	specificMimeType,
+	type GeneratedFile,
+} from '../../../shared/files';
 
 /** A message as the conversation endpoints return it. */
 export interface ConversationMessage {
@@ -206,12 +211,7 @@ export function simplifyMessage(
 	};
 	if (message.role === 'assistant') {
 		simplified.status = messageStatus(message, superseded, resuming);
-		simplified.files = generatedFiles(message).map(({ fileName, size, mimeType, url }) => ({
-			fileName,
-			size,
-			mimeType,
-			url,
-		}));
+		simplified.files = generatedFiles(message).map(fileDetails);
 		simplified.tokens = tokenUsage(message);
 		const failure = !resuming && turnFailure(message, { whileWaiting: true });
 		// Not "error": n8n 2.16 counts any item with an "error" key as failed (Retry On Fail).

@@ -215,6 +215,30 @@ describe('turnFailure', () => {
 });
 
 describe('simplifyMessage', () => {
+	it('lists generated files with a safe name and type, and the link as sent', () => {
+		const url = '/v1/storage/download/org-1/sandbox_outputs/1/c1/x.exe';
+		const message = assistant({
+			metadata: {
+				widgets: [
+					{
+						type: 'file_download',
+						files: [
+							{
+								filename: '../../report\u202Efdp.exe',
+								url,
+								content_type: 'text/html\r\nX-Injected: 1',
+							},
+						],
+					},
+				],
+			},
+		});
+
+		expect(simplifyMessage(message).files).toEqual([
+			{ fileName: 'reportfdp.exe', size: undefined, mimeType: undefined, url },
+		]);
+	});
+
 	it('keeps text, files, tokens and the failure of an assistant message', () => {
 		expect(
 			simplifyMessage(

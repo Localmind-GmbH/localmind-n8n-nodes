@@ -133,6 +133,60 @@ export function specificMimeType(mimeType?: string): string | undefined {
 	return mimeType && !mimeType.startsWith(GENERIC_MIME_TYPE) ? mimeType : undefined;
 }
 
+/** A MIME type safe for a header line; anything else (for example with line breaks) becomes generic. */
+export function safeMimeType(mimeType: string): string {
+	return /^[\w.+-]+\/[\w.+-]+(?:\s*;\s*[\w.+-]+=[\w.+"-]+)*$/.test(mimeType)
+		? mimeType
+		: GENERIC_MIME_TYPE;
+}
+
+/** The first of the MIME types Localmind sent that is specific and well-formed. */
+export function binaryMimeType(...mimeTypes: Array<string | undefined>): string | undefined {
+	return mimeTypes
+		.map((mimeType) => specificMimeType(mimeType && safeMimeType(mimeType)))
+		.find(Boolean);
+}
+
+const MAX_FILE_NAME_LENGTH = 200;
+
+/**
+ * Control characters, and the direction marks that can disguise an extension: U+202E in
+ * "report<U+202E>fdp.exe" makes it show as "reportexe.pdf".
+ */
+const isHiddenCharacter = (code: number) =>
+	code <= 0x1f ||
+	code === 0x7f ||
+	(code >= 0x202a && code <= 0x202e) ||
+	(code >= 0x2066 && code <= 0x2069);
+
+/**
+ * A file name from Localmind, safe for the steps after the node (saving the file, attaching it to a
+ * mail): its last path segment only, without hidden characters, at most 200 characters.
+ */
+export function safeFileName(name: string | undefined): string {
+	const last = (name ?? '').split(/[/\\]/).pop() ?? '';
+	const visible = Array.from(last)
+		.filter((char) => !isHiddenCharacter(char.codePointAt(0) ?? 0))
+		.join('')
+		.trim();
+	const usable = visible === '.' || visible === '..' ? '' : visible;
+	// Counted in characters, not UTF-16 units, so that shortening never splits one such as an emoji.
+	const characters = Array.from(usable);
+	if (characters.length <= MAX_FILE_NAME_LENGTH) return usable || 'file';
+	const dot = usable.lastIndexOf('.');
+	const extension = dot > 0 && usable.length - dot <= 16 ? usable.slice(dot) : '';
+	const kept = MAX_FILE_NAME_LENGTH - Array.from(extension).length;
+	return characters.slice(0, kept).join('') + extension;
+}
+
+/**
+ * A generated file as the nodes list it: a safe name and type, for steps that build a path or a
+ * mail from it. The link stays as Localmind sent it, for File → Download by URL.
+ */
+export function fileDetails({ fileName, size, mimeType, url }: GeneratedFile): IDataObject {
+	return { fileName: safeFileName(fileName), size, mimeType: binaryMimeType(mimeType), url };
+}
+
 /** The prefix of the binary fields for generated files: file_0, file_1, … */
 export const DEFAULT_BINARY_PREFIX = 'file_';
 
@@ -192,12 +246,7 @@ export async function attachGeneratedFiles(
 	settings: DownloadSettings,
 	itemIndex: number,
 ): Promise<void> {
-	const details: IDataObject[] = files.map(({ fileName, size, mimeType, url }) => ({
-		fileName,
-		size,
-		mimeType,
-		url,
-	}));
+	const details = files.map(fileDetails);
 	item.json.files = details;
 	if (!settings.download || files.length === 0) return;
 
@@ -232,8 +281,8 @@ export async function attachGeneratedFiles(
 			const property = `${settings.prefix}${index}`;
 			binary[property] = await this.helpers.prepareBinaryData(
 				data,
-				file.fileName,
-				specificMimeType(file.mimeType) ?? specificMimeType(contentType),
+				safeFileName(file.fileName),
+				binaryMimeType(file.mimeType, contentType),
 			);
 			details[index].binaryProperty = property;
 		} catch (error) {

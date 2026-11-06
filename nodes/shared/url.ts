@@ -6,6 +6,21 @@ export function normalizeBaseUrl(url: string): string {
 	return url.trim().replace(/\/+$/, '').replace(/\/v1$/i, '').replace(/\/+$/, '');
 }
 
+/**
+ * https, or plain http to this machine only: localhost, *.localhost, 127.x.x.x or [::1]. Plain http
+ * to any other host would carry the API key and all data unencrypted. The credential applies the
+ * same pattern in its expressions, so the key is never sent to such a URL. Subdomains of localhost
+ * take only letters, digits and hyphens: URL parsers read "\" as "/", so "evil.com\.localhost"
+ * would reach evil.com.
+ */
+export const ENCRYPTED_OR_LOCAL_URL =
+	/^(?:https:\/\/|http:\/\/(?:localhost|(?:[a-z\d-]+\.)+localhost|127(?:\.\d{1,3}){3}|\[::1\])(?::\d+)?(?:[/?#]|$))/i;
+
+/** Whether the API key may be sent to this credential URL (see `ENCRYPTED_OR_LOCAL_URL`). */
+export function isEncryptedOrLocalUrl(url: string): boolean {
+	return ENCRYPTED_OR_LOCAL_URL.test(url.trim());
+}
+
 const ORIGIN = /^(https?:\/\/)([^/:?#]+)(:\d+)?/i;
 
 /**

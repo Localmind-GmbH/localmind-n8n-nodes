@@ -27,8 +27,12 @@ const ALLOWED_HOSTS = new Set([
 	'localhost',
 ]);
 
-/** Reserved example domains (RFC 2606), as in placeholders such as acme-api.example.com. */
-const isExampleHost = (host) => /(^|\.)example\.(com|net|org)$/.test(host);
+/**
+ * Reserved names that never point to a real server (RFC 2606, RFC 6761): example domains, as in
+ * placeholders such as acme-api.example.com, and .test, .example, .invalid and localhost.
+ */
+const isReservedHost = (host) =>
+	/(^|\.)(example\.(com|net|org)|example|test|invalid|localhost)$/.test(host);
 
 // Links of any scheme (https, wss, ssh, git+https, …); "${…}" stays in for template placeholders.
 const LINK = /\b[a-z][a-z\d+.-]*:\/\/[^\s"'`<>()[\]\\]+/gi;
@@ -45,7 +49,10 @@ function linkTarget(link) {
 		const host = url.hostname.replace(/\$\{[^}]*\}\.?/g, '').toLowerCase();
 		return host ? { host, path: url.pathname.toLowerCase() } : undefined;
 	} catch {
-		return { host: trimmed, path: '' };
+		// Not a URL: kept when a host name follows the scheme, skipped when nothing does, as in a
+		// pattern such as "https:\/\/|http:\/\/" in code, which points nowhere.
+		const host = /^[a-z][a-z\d+.-]*:\/\/([a-z\d][a-z\d.-]*)/i.exec(trimmed)?.[1];
+		return host ? { host: host.toLowerCase(), path: '' } : undefined;
 	}
 }
 
@@ -58,8 +65,10 @@ const FORBIDDEN = [
 	],
 	['a private key', /-----BEGIN [A-Z ]*PRIVATE KEY-----/],
 	['a local path', /\/home\/[a-z_][\w-]*\/|\/Users\/[^/\s]+\/|\/opt\/stacks\/|[A-Za-z]:\\Users\\/],
-	['an IP address', /\b(?:\d{1,3}\.){3}\d{1,3}\b/],
 ];
+
+/** IP addresses other than this machine's (127.x.x.x), which tells nothing about a network. */
+const IP_ADDRESS = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
 
 /** Editors leave comments and metadata in SVGs, such as file paths and author names. */
 const SVG_FORBIDDEN = [['a comment or editor metadata', /<!--|<metadata|inkscape:|sodipodi:/]];
@@ -110,11 +119,16 @@ for (const path of files) {
 	const unescaped = text.replaceAll('\\/', '/');
 	for (const match of unescaped.matchAll(LINK)) {
 		const target = linkTarget(match[0]);
-		if (!target || ALLOWED_HOSTS.has(target.host) || isExampleHost(target.host)) continue;
+		if (!target || ALLOWED_HOSTS.has(target.host) || isReservedHost(target.host)) continue;
 		if (isOwnRepository(target)) continue;
 		problems.push(
 			`${path}:${lineOf(unescaped, match.index)}: contains a link to an unexpected host`,
 		);
+	}
+	for (const match of text.matchAll(IP_ADDRESS)) {
+		if (!match[0].startsWith('127.')) {
+			problems.push(`${path}:${lineOf(text, match.index)}: contains an IP address`);
+		}
 	}
 	for (const match of text.matchAll(EMAIL)) {
 		if (!ALLOWED_EMAILS.has(match[0].toLowerCase())) {

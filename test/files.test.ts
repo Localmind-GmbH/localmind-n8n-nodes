@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+	binaryMimeType,
 	downloadLinkPath,
 	downloadPath,
 	generatedFilePath,
+	safeFileName,
 	specificMimeType,
 } from '../nodes/shared/files';
 
@@ -125,5 +127,57 @@ describe('specificMimeType', () => {
 		expect(specificMimeType('application/octet-stream')).toBeUndefined();
 		expect(specificMimeType('image/png')).toBe('image/png');
 		expect(specificMimeType(undefined)).toBeUndefined();
+	});
+});
+
+describe('safeFileName', () => {
+	it('keeps ordinary names, umlauts, spaces and brackets', () => {
+		expect(safeFileName('Bericht Q3 (für Max).xlsx')).toBe('Bericht Q3 (für Max).xlsx');
+	});
+
+	it('keeps only the last path segment', () => {
+		expect(safeFileName('../../etc/passwd')).toBe('passwd');
+		expect(safeFileName('C:\\Users\\x\\report.pdf')).toBe('report.pdf');
+		expect(safeFileName('folder/')).toBe('file');
+		expect(safeFileName('..')).toBe('file');
+	});
+
+	it('drops control characters and the marks that disguise an extension', () => {
+		expect(safeFileName('report\r\nX-Injected: 1.pdf')).toBe('reportX-Injected: 1.pdf');
+		expect(safeFileName('report\u202Efdp.exe')).toBe('reportfdp.exe');
+		expect(safeFileName('a\u2066b\u2069.txt')).toBe('ab.txt');
+	});
+
+	it('shortens a very long name but keeps its extension', () => {
+		const name = safeFileName(`${'x'.repeat(500)}.xlsx`);
+		expect(name).toHaveLength(200);
+		expect(name.endsWith('.xlsx')).toBe(true);
+	});
+
+	it('never splits a character such as an emoji when shortening', () => {
+		const name = safeFileName(`${'😀'.repeat(300)}.txt`);
+		expect(Array.from(name)).toHaveLength(200);
+		expect(name.endsWith('.txt')).toBe(true);
+		expect(name).not.toMatch(
+			/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+		);
+	});
+
+	it('falls back to "file" for an empty name', () => {
+		expect(safeFileName(undefined)).toBe('file');
+		expect(safeFileName('\u0000\u0007')).toBe('file');
+	});
+});
+
+describe('binaryMimeType', () => {
+	it('takes the first specific and well-formed type', () => {
+		expect(binaryMimeType('application/octet-stream', 'image/png')).toBe('image/png');
+		expect(binaryMimeType('text/plain; charset=utf-8')).toBe('text/plain; charset=utf-8');
+	});
+
+	it('drops a type with line breaks or other header tricks', () => {
+		expect(binaryMimeType('text/html\r\nX-Injected: 1')).toBeUndefined();
+		expect(binaryMimeType('text/html\r\nX-Injected: 1', 'application/pdf')).toBe('application/pdf');
+		expect(binaryMimeType(undefined, '')).toBeUndefined();
 	});
 });

@@ -1,5 +1,7 @@
 import { randomString } from 'n8n-workflow';
 
+import { safeMimeType } from '../../../shared/files';
+
 export interface MultipartFile {
 	field: string;
 	fileName: string;
@@ -32,11 +34,4 @@ export function multipartBody(
 		Buffer.from(`\r\n--${boundary}--\r\n`),
 	);
 	return { body: Buffer.concat(parts), contentType: `multipart/form-data; boundary=${boundary}` };
-}
-
-/** A MIME type safe for a header line; anything else (for example with line breaks) becomes generic. */
-export function safeMimeType(mimeType: string): string {
-	return /^[\w.+-]+\/[\w.+-]+(?:\s*;\s*[\w.+-]+=[\w.+"-]+)*$/.test(mimeType)
-		? mimeType
-		: 'application/octet-stream';
 }

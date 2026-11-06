@@ -8,9 +8,10 @@ import {
 	type LocalmindDocument,
 } from '../../../shared/documents';
 import {
+	binaryMimeType,
 	downloadLinkPath,
 	isDownloadLink,
-	specificMimeType,
+	safeFileName,
 	UNSAFE_LINK_REFUSAL,
 } from '../../../shared/files';
 import { localmindApiDownload, localmindApiRequest } from '../../../shared/transport';
@@ -56,21 +57,18 @@ async function download(
 		itemIndex,
 	});
 	const last = apiPath.split('/').pop() || 'file';
-	let fileName = last;
+	let decoded = last;
 	try {
-		fileName = decodeURIComponent(last);
+		decoded = decodeURIComponent(last);
 	} catch {
 		// Not UTF-8 percent-encoding: the name is kept as it is.
 	}
+	const fileName = safeFileName(decoded);
 	const property = textParam(this.getNodeParameter('binaryPropertyName', itemIndex, 'data'));
 	return {
 		json: { fileName, size: data.length },
 		binary: {
-			[property]: await this.helpers.prepareBinaryData(
-				data,
-				fileName,
-				specificMimeType(contentType),
-			),
+			[property]: await this.helpers.prepareBinaryData(data, fileName, binaryMimeType(contentType)),
 		},
 	};
 }

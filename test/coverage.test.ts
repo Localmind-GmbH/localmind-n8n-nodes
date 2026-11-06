@@ -1,5 +1,6 @@
 import {
 	sleep,
+	Workflow,
 	type IDataObject,
 	type ILoadOptionsFunctions,
 	type INode,
@@ -16,7 +17,6 @@ import { generatedFiles } from '../nodes/Localmind/resources/conversation/messag
 import { mergeMetadata } from '../nodes/Localmind/resources/document/execute';
 import { executeFile } from '../nodes/Localmind/resources/file/execute';
 import { executeJob } from '../nodes/Localmind/resources/job/execute';
-import { safeMimeType } from '../nodes/Localmind/resources/file/multipart';
 import {
 	simplifyAgent,
 	simplifyDocument,
@@ -24,7 +24,12 @@ import {
 } from '../nodes/Localmind/resources/simplify';
 import { executeSpace } from '../nodes/Localmind/resources/space';
 import { stepLimitFromAnswer } from '../nodes/shared/errors';
-import { attachGeneratedFiles, binaryPrefix, downloadSettings } from '../nodes/shared/files';
+import {
+	attachGeneratedFiles,
+	binaryPrefix,
+	downloadSettings,
+	safeMimeType,
+} from '../nodes/shared/files';
 import { parseJsonAnswer } from '../nodes/shared/json';
 import { normalizeFolder } from '../nodes/shared/params';
 import { durationText, pause } from '../nodes/shared/polling';
@@ -49,6 +54,46 @@ describe('credential', () => {
 		expect(messages.join(' ')).toContain('rejected the API key');
 		expect(messages.join(' ')).toContain('-api');
 	});
+
+	it.each([
+		['https://acme-api.example.com/v1/', 'Bearer sk-test', 'https://acme-api.example.com'],
+		['http://dev-api.localhost', 'Bearer sk-test', 'http://dev-api.localhost'],
+		['http://acme-api.example.com', '', 'https://plain-http-is-only-allowed-for-localhost.invalid'],
+		['http://localhost@evil.com', '', 'https://plain-http-is-only-allowed-for-localhost.invalid'],
+		['http://evil.com\\.localhost', '', 'https://plain-http-is-only-allowed-for-localhost.invalid'],
+	])(
+		"sends the key and tests only where allowed, in n8n's expression engine: %s",
+		(url, header, testUrl) => {
+			const workflow = new Workflow({
+				nodes: [
+					{
+						id: '1',
+						name: 'Test',
+						type: 'n8n-nodes-base.noOp',
+						typeVersion: 1,
+						position: [0, 0],
+						parameters: {},
+					},
+				],
+				connections: {},
+				active: false,
+				nodeTypes: {
+					getByName: () => ({ description: { properties: [] } }),
+					getByNameAndVersion: () => ({ description: { properties: [] } }),
+					getKnownTypes: () => ({}),
+				} as never,
+			});
+			const resolve = (expression: string) =>
+				workflow.expression.getParameterValue(expression, null, 0, 0, 'Test', [], 'internal', {
+					$credentials: { url, apiKey: 'sk-test' },
+				});
+
+			expect(resolve(String(credential.authenticate.properties.headers?.Authorization))).toBe(
+				header,
+			);
+			expect(resolve(String(credential.test.request.baseURL))).toBe(testUrl);
+		},
+	);
 
 	it('keeps the API key in a password field', () => {
 		const apiKey = credential.properties.find(

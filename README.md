@@ -10,10 +10,10 @@ Setting it up for the first time? The [customer guide](https://github.com/Localm
 
 The **Localmind API** credential has two fields:
 
-| Field   | Value                                                                                                                                                                                                                |
-| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| API URL | The API host of your Localmind instance, usually the one ending in `-api` (for example `https://acme-api.example.com`). The app host (usually ending in `-app`) does not serve the API. A trailing `/v1` is ignored. |
-| API Key | A Localmind user API key (`sk-…`). The nodes act with the key owner's permissions and space scopes.                                                                                                                  |
+| Field   | Value                                                                                                                                                                                                                                                                                                                                                                                |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| API URL | The API host of your Localmind instance, usually the one ending in `-api` (for example `https://acme-api.example.com`). The app host (usually ending in `-app`) does not serve the API. It must start with `https://`: plain `http://` works only for this machine (`localhost`, `*.localhost`, `127.0.0.1`), since it would carry the key unencrypted. A trailing `/v1` is ignored. |
+| API Key | A Localmind user API key (`sk-…`). The nodes act with the key owner's permissions and space scopes.                                                                                                                                                                                                                                                                                  |
 
 Saving the credential lists the agents the key can use. A wrong key or an `-app` host fails with a message that says what to fix.
 

@@ -95,18 +95,43 @@ describe('localmindApiRequest', () => {
 			[
 				{
 					statusCode: 308,
-					headers: { location: 'https://acme-api.example.com/v1/models' },
+					headers: { location: 'https://dev-api.localhost/v1/models' },
 					body: '',
 				},
 				{ body: { data: [] } },
 			],
-			'http://acme-api.example.com',
+			'http://dev-api.localhost',
 		);
 
 		await localmindApiRequest.call(context, { method: 'GET', path: '/models' });
 
 		expect(httpRequestWithAuthentication.mock.calls[1][1].url).toBe(
-			'https://acme-api.example.com/v1/models',
+			'https://dev-api.localhost/v1/models',
+		);
+	});
+
+	it('refuses a plain-http API URL of another host before any request', async () => {
+		const { context, httpRequestWithAuthentication } = fakeContext(
+			[{ body: { data: [] } }],
+			'http://acme-api.example.com',
+		);
+
+		await expect(
+			localmindApiRequest.call(context, { method: 'GET', path: '/models' }),
+		).rejects.toMatchObject({ message: 'Localmind: the API URL must use https' });
+		expect(httpRequestWithAuthentication).not.toHaveBeenCalled();
+	});
+
+	it('allows plain http to this machine', async () => {
+		const { context, httpRequestWithAuthentication } = fakeContext(
+			[{ body: { data: [] } }],
+			'http://dev-api.localhost/',
+		);
+
+		await localmindApiRequest.call(context, { method: 'GET', path: '/models' });
+
+		expect(httpRequestWithAuthentication.mock.calls[0][1].url).toBe(
+			'http://dev-api.localhost/v1/models',
 		);
 	});
 
@@ -387,11 +412,100 @@ describe('localmindApiStream', () => {
 			message: 'Localmind: Context too long (context_length_exceeded)',
 		});
 	});
+
+	it('reads at most 64 KB of a streamed error body and closes the stream', async () => {
+		let chunksRead = 0;
+		async function* endless() {
+			for (;;) {
+				chunksRead++;
+				yield Buffer.from(`{"detail":"${'x'.repeat(16 * 1024)}`);
+			}
+		}
+		const { context } = fakeContext([{ statusCode: 400, body: endless() as never }]);
+
+		await expect(
+			localmindApiStream.call(context, { method: 'POST', path: '/chat/completions', body: {} }),
+		).rejects.toBeInstanceOf(NodeApiError);
+		expect(chunksRead).toBeLessThanOrEqual(5);
+	});
+
+	it('reports the status, not the read error, when reading the error body fails', async () => {
+		async function* failing(): AsyncIterableIterator<Buffer> {
+			yield Buffer.from('{"detail":');
+			throw Object.assign(new Error('aborted'), {
+				config: { headers: { Authorization: 'Bearer sk-secret' } },
+			});
+		}
+		const { context } = fakeContext([
+			{ statusCode: 400, statusMessage: 'Bad Request', body: failing() as never },
+		]);
+
+		const error = await localmindApiStream
+			.call(context, { method: 'POST', path: '/chat/completions', body: {} })
+			.catch((caught: unknown) => caught);
+
+		expect(error).toMatchObject({ message: 'Localmind: Bad Request', httpCode: '400' });
+		expect(JSON.stringify(error)).not.toContain('sk-secret');
+	});
+});
+
+describe('errors from a broken or hostile server', () => {
+	it('builds the error at once for a deeply nested error body', async () => {
+		const depth = 5000;
+		const body = JSON.parse('{"error":'.repeat(depth) + '{}' + '}'.repeat(depth));
+		const { context } = fakeContext([{ statusCode: 500, statusMessage: 'Server Error', body }]);
+
+		const started = performance.now();
+		await expect(
+			localmindApiRequest.call(context, { method: 'POST', path: '/conversations', body: {} }),
+		).rejects.toMatchObject({ message: 'Localmind: Server Error' });
+		// n8n's error class searched the whole body before: seconds at a tenth of this depth.
+		expect(performance.now() - started).toBeLessThan(500);
+	});
+
+	it('cuts a very long error message', async () => {
+		const { context } = fakeContext([{ statusCode: 400, body: { detail: 'x'.repeat(5000) } }]);
+
+		const error = (await localmindApiRequest
+			.call(context, { method: 'GET', path: '/models' })
+			.catch((caught: unknown) => caught)) as Error;
+
+		expect(error.message.length).toBeLessThan(1100);
+		expect(error.message.endsWith('…')).toBe(true);
+	});
 });
 
 describe('localmindApiRequestAllItems', () => {
 	const page = (items: number[], pageNumber: number, totalPages: number) => ({
 		body: { items, page: pageNumber, total_pages: totalPages, total_items: 0, page_size: 200 },
+	});
+
+	it('stops Return All after 1000 pages when the page count never ends', async () => {
+		const endless = Array.from({ length: 1001 }, (_, index) => page([index], index + 1, 1e9));
+		const { context, httpRequestWithAuthentication } = fakeContext(endless);
+
+		await expect(
+			localmindApiRequestAllItems.call(context, {
+				method: 'POST',
+				path: '/spaces/search',
+				body: {},
+				idempotent: true,
+			}),
+		).rejects.toMatchObject({ message: 'Localmind: more than 200000 results' });
+		expect(httpRequestWithAuthentication).toHaveBeenCalledTimes(1000);
+	});
+
+	it('suggests a lower limit when the limit itself is that high', async () => {
+		const endless = Array.from({ length: 1001 }, (_, index) => page([index], index + 1, 1e9));
+		const { context } = fakeContext(endless);
+
+		await expect(
+			localmindApiRequestAllItems.call(
+				context,
+				{ method: 'POST', path: '/spaces/search', body: {}, idempotent: true },
+				10_000_000,
+			),
+		).rejects.toMatchObject({ description: "Set a lower 'Limit', or narrow the request." });
 	});
 
 	it('follows the pages to the end', async () => {
