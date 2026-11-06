@@ -34,6 +34,88 @@ describe('answerFor', () => {
 });
 
 describe('generatedFiles', () => {
+	it('reads the documented generated_files field from Localmind 1.7.0, not the widgets', () => {
+		const message = assistant({
+			generated_files: [
+				{
+					filename: 'Bericht Q3 (für Max).xlsx',
+					url: '/v1/storage/download/org-1/sandbox_outputs/1/c1/Bericht%20Q3%20%28f%C3%BCr%20Max%29.xlsx',
+					mime_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+					size_bytes: 4096,
+				},
+				{ filename: 'no-link.txt' },
+				'not an object',
+			],
+			metadata: {
+				widgets: [
+					{
+						type: 'file_download',
+						files: [{ filename: 'old.csv', url: '/v1/storage/download/org-1/old.csv' }],
+					},
+				],
+			},
+		});
+
+		expect(generatedFiles(message)).toEqual([
+			{
+				fileName: 'Bericht Q3 (für Max).xlsx',
+				url: '/v1/storage/download/org-1/sandbox_outputs/1/c1/Bericht%20Q3%20%28f%C3%BCr%20Max%29.xlsx',
+				path: '/storage/download/org-1/sandbox_outputs/1/c1/Bericht%20Q3%20%28f%C3%BCr%20Max%29.xlsx',
+				size: 4096,
+				mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+			},
+		]);
+	});
+
+	it('takes a size of 0 as unknown, in the field and in the widgets', () => {
+		const url = '/v1/storage/download/org-1/out.csv';
+		expect(
+			generatedFiles(
+				assistant({ generated_files: [{ filename: 'out.csv', url, size_bytes: 0 }] }),
+			)[0].size,
+		).toBeUndefined();
+		expect(
+			generatedFiles(
+				assistant({
+					metadata: {
+						widgets: [{ type: 'file_download', files: [{ filename: 'out.csv', url, size: 0 }] }],
+					},
+				}),
+			)[0].size,
+		).toBeUndefined();
+	});
+
+	it('takes an empty generated_files field as no files, even with old widgets', () => {
+		const message = assistant({
+			generated_files: [],
+			metadata: {
+				widgets: [
+					{
+						type: 'file_download',
+						files: [{ filename: 'old.csv', url: '/v1/storage/download/org-1/old.csv' }],
+					},
+				],
+			},
+		});
+
+		expect(generatedFiles(message)).toEqual([]);
+	});
+
+	it('falls back to the widgets when the field is missing (Localmind before 1.7.0)', () => {
+		const message = assistant({
+			metadata: {
+				widgets: [
+					{
+						type: 'file_download',
+						files: [{ filename: 'old.csv', url: '/v1/storage/download/org-1/old.csv' }],
+					},
+				],
+			},
+		});
+
+		expect(generatedFiles(message).map((file) => file.fileName)).toEqual(['old.csv']);
+	});
+
 	it('reads file_download widgets, encodes the link and drops the generic MIME type', () => {
 		const message = assistant({
 			metadata: {

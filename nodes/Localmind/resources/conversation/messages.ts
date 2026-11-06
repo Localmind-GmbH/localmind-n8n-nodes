@@ -20,6 +20,8 @@ export interface ConversationMessage {
 	parent_message_id?: string | null;
 	metadata?: IDataObject | null;
 	is_streaming?: boolean;
+	/** From Localmind 1.7.0: the files the message offers for download, empty when there are none. */
+	generated_files?: unknown[] | null;
 }
 
 /** Why a finished turn has no usable answer. */
@@ -44,35 +46,54 @@ export function infoWidget(
 	return widgets(message).find((widget) => widget.type === 'info' && widget.info_type === infoType);
 }
 
+const isText = (value: unknown): value is string => typeof value === 'string' && value !== '';
+
+const isEntry = (value: unknown): value is IDataObject =>
+	typeof value === 'object' && value !== null;
+
+/** One generated file, read the same way from either source; undefined without a link. */
+function generatedFile(
+	url: unknown,
+	filename: unknown,
+	size: unknown,
+	mimeType: unknown,
+): GeneratedFile | undefined {
+	if (!isText(url)) return undefined;
+	const fileName = isText(filename) ? filename : undefined;
+	return {
+		fileName: fileName ?? 'file',
+		url,
+		// An unusable link gets an empty path, refused later.
+		path: generatedFilePath(url, fileName) ?? '',
+		// Localmind writes 0 when it does not know the size: that is unknown, not an empty file.
+		size: typeof size === 'number' && size > 0 ? size : undefined,
+		mimeType: specificMimeType(typeof mimeType === 'string' ? mimeType : undefined),
+	};
+}
+
 /**
  * The files the agent generated with code execution in this message.
  *
- * Read from the message's "file_download" widgets, which are the app's display data, because the
- * conversation API has no documented field for them yet. Switch to that field once there is one.
+ * From Localmind 1.7.0 the message lists them in its documented `generated_files` field, empty
+ * when there are none. Older versions keep them only in the message's "file_download" widgets,
+ * the app's display data, from which Localmind itself fills that field.
  */
-const isText = (value: unknown): value is string => typeof value === 'string' && value !== '';
-
 export function generatedFiles(message: ConversationMessage): GeneratedFile[] {
 	const files = new Map<string, GeneratedFile>();
+	// By path: a message can list a file once with an unencoded and once with an encoded link.
+	const add = (file: GeneratedFile | undefined) => {
+		if (file) files.set(file.path || file.url, file);
+	};
+	if (Array.isArray(message.generated_files)) {
+		for (const entry of message.generated_files.filter(isEntry)) {
+			add(generatedFile(entry.url, entry.filename, entry.size_bytes, entry.mime_type));
+		}
+		return [...files.values()];
+	}
 	for (const widget of widgets(message)) {
 		if (widget.type !== 'file_download' || !Array.isArray(widget.files)) continue;
-		for (const file of widget.files as unknown[]) {
-			if (typeof file !== 'object' || file === null) continue;
-			const entry = file as IDataObject;
-			if (!isText(entry.url)) continue;
-			const fileName = isText(entry.filename) ? entry.filename : undefined;
-			// An unusable link gets an empty path, refused later.
-			const path = generatedFilePath(entry.url, fileName) ?? '';
-			// By path: a message can list a file once with an unencoded and once with an encoded link.
-			files.set(path || entry.url, {
-				fileName: fileName ?? 'file',
-				url: entry.url,
-				path,
-				size: typeof entry.size === 'number' ? entry.size : undefined,
-				mimeType: specificMimeType(
-					typeof entry.content_type === 'string' ? entry.content_type : undefined,
-				),
-			});
+		for (const entry of (widget.files as unknown[]).filter(isEntry)) {
+			add(generatedFile(entry.url, entry.filename, entry.size, entry.content_type));
 		}
 	}
 	return [...files.values()];
