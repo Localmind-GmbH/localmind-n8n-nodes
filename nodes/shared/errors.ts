@@ -68,7 +68,8 @@ function validationDetail(entries: unknown[]): string {
 		.join('; ');
 }
 
-function errorCode(body: IDataObject): string | undefined {
+/** The stable code Localmind gives some errors, such as "upload_type_disabled". */
+export function errorCode(body: IDataObject): string | undefined {
 	const nested = isObject(body.error) ? body.error.code : undefined;
 	const code = body.error_code ?? body.code ?? nested;
 	return typeof code === 'string' && code ? code : undefined;

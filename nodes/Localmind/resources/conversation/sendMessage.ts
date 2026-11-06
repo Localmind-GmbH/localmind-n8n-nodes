@@ -443,10 +443,9 @@ async function waitWithoutState(
 export async function waitForAnswer(
 	this: IExecuteFunctions,
 	turn: QueuedTurn,
-	timeoutMs: number,
+	deadline: Deadline,
 	itemIndex: number,
 ): Promise<ConversationMessage> {
-	const deadline = new Deadline(timeoutMs);
 	let runId = turn.run_id;
 	const checkedRuns = new Set([runId]);
 	const handOver = new HandOver();

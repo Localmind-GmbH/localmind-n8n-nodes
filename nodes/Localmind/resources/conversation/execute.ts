@@ -7,10 +7,10 @@ import {
 	type DownloadOptions,
 } from '../../../shared/files';
 import { commaList, idParam, textParam, UUID } from '../../../shared/params';
-import { timeoutMs } from '../../../shared/polling';
+import { Deadline, timeoutMs } from '../../../shared/polling';
 import { localmindApiRequest, localmindApiRequestAllItems } from '../../../shared/transport';
 import { getLimit } from '../common';
-import { buildAttachments } from './attachments';
+import { buildAttachments, type AttachmentTarget } from './attachments';
 import {
 	generatedFiles,
 	simplifyMessage,
@@ -74,6 +74,42 @@ function parseToolIds(this: IExecuteFunctions, value: unknown, itemIndex: number
 	return ids;
 }
 
+/**
+ * Queues the message. From Localmind 1.7.0 the space's chat settings also decide whether images
+ * reach the model; a refusal names only its code, so it is explained here.
+ */
+async function queueMessage(
+	this: IExecuteFunctions,
+	body: IDataObject,
+	itemIndex: number,
+): Promise<QueuedTurn> {
+	try {
+		return (await localmindApiRequest.call(this, {
+			method: 'POST',
+			path: `${conversationPath.call(this, itemIndex)}/messages-async`,
+			body,
+			itemIndex,
+		})) as QueuedTurn;
+	} catch (error) {
+		if (!(error instanceof NodeApiError)) {
+			throw new NodeOperationError(this.getNode(), error as Error, { itemIndex });
+		}
+		const code = error.context.localmindCode;
+		if (typeof code === 'string' && code.startsWith('upload_type_')) {
+			throw new NodeOperationError(
+				this.getNode(),
+				`Localmind refused the images of the message (${code})`,
+				{
+					itemIndex,
+					description:
+						"The space's chat settings do not let images go to the model: their type is switched off, or only stored for the code sandbox. Switch it on in the space's chat settings, or send the message without images. Files uploaded for the message stay unused in Localmind.",
+				},
+			);
+		}
+		throw new NodeApiError(this.getNode(), error as unknown as JsonObject, { itemIndex });
+	}
+}
+
 async function sendMessage(
 	this: IExecuteFunctions,
 	itemIndex: number,
@@ -95,17 +131,34 @@ async function sendMessage(
 
 	const body: IDataObject = { message };
 	const names = commaList(options.attachments);
-	if (names.length) body.attachments = await buildAttachments.call(this, itemIndex, names);
+	if (names.length) {
+		// Read only when a file is uploaded: the conversation's space and agent take it.
+		let target: Promise<AttachmentTarget> | undefined;
+		const loadTarget = async () => {
+			target ??= (async () => {
+				const conversation = (await localmindApiRequest.call(this, {
+					method: 'GET',
+					path: conversationPath.call(this, itemIndex),
+					itemIndex,
+				})) as IDataObject;
+				const agentId = conversation.active_agent_id ?? conversation.agent_id;
+				return {
+					conversationId: String(conversation.id),
+					spaceId: String(conversation.space_id),
+					...(typeof agentId === 'string' && agentId && { agentId }),
+				};
+			})();
+			return await target;
+		};
+		// Its own wait: a message sent when the files took nearly all of one would time out at once.
+		const processing = new Deadline(timeout);
+		body.attachments = await buildAttachments.call(this, itemIndex, names, loadTarget, processing);
+	}
 	if (options.disabledToolIds !== undefined) {
 		body.disabled_tool_ids = parseToolIds.call(this, options.disabledToolIds, itemIndex);
 	}
 
-	const turn = (await localmindApiRequest.call(this, {
-		method: 'POST',
-		path: `${conversationPath.call(this, itemIndex)}/messages-async`,
-		body,
-		itemIndex,
-	})) as QueuedTurn;
+	const turn = await queueMessage.call(this, body, itemIndex);
 	const ids = {
 		conversationId: turn.conversation_id,
 		userMessageId: turn.user_message_id,
@@ -118,7 +171,7 @@ async function sendMessage(
 
 	// Once the turn is queued, every error names it, so a later step can pick up the answer.
 	try {
-		const answer = await waitForAnswer.call(this, turn, timeout, itemIndex);
+		const answer = await waitForAnswer.call(this, turn, new Deadline(timeout), itemIndex);
 		const failure = turnFailure(answer);
 		if (failure) {
 			const detail = failure.code ? `${failure.message} (${failure.code})` : failure.message;

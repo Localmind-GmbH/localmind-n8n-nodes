@@ -2,6 +2,7 @@ import { sleep } from 'n8n-workflow';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { waitForAnswer } from '../nodes/Localmind/resources/conversation/sendMessage';
+import { Deadline } from '../nodes/shared/polling';
 import {
 	API,
 	answer,
@@ -39,7 +40,7 @@ describe('waitForAnswer', () => {
 			scriptedConversation({ polls: [running, running, idle], messages: [answer()] }),
 		);
 
-		const result = await waitForAnswer.call(context, turn, FIFTEEN_MINUTES, 0);
+		const result = await waitForAnswer.call(context, turn, new Deadline(FIFTEEN_MINUTES), 0);
 
 		expect(result.id).toBe('a1');
 		expect(sleeps()).toEqual([2_000, 2_000]);
@@ -60,7 +61,7 @@ describe('waitForAnswer', () => {
 			}),
 		);
 
-		await waitForAnswer.call(context, turn, FIFTEEN_MINUTES, 0);
+		await waitForAnswer.call(context, turn, new Deadline(FIFTEEN_MINUTES), 0);
 
 		expect(sleeps()).toEqual([20_000, 2_000]);
 		expect(requests.map((r) => r.url)).toContain(`${API}/pipeline/r2`);
@@ -81,7 +82,9 @@ describe('waitForAnswer', () => {
 			}),
 		);
 
-		await expect(waitForAnswer.call(context, turn, FIFTEEN_MINUTES, 0)).rejects.toMatchObject({
+		await expect(
+			waitForAnswer.call(context, turn, new Deadline(FIFTEEN_MINUTES), 0),
+		).rejects.toMatchObject({
 			message: 'Localmind: Credits exhausted',
 			description: expect.stringContaining('incomplete'),
 		});
@@ -96,7 +99,7 @@ describe('waitForAnswer', () => {
 			}),
 		);
 
-		const result = await waitForAnswer.call(context, turn, FIFTEEN_MINUTES, 0);
+		const result = await waitForAnswer.call(context, turn, new Deadline(FIFTEEN_MINUTES), 0);
 
 		expect(result.id).toBe('a1');
 		expect(requests.filter((r) => r.qs?.include_messages === true)).toHaveLength(1);
@@ -107,13 +110,17 @@ describe('waitForAnswer', () => {
 			scriptedConversation({ polls: [idle], messages: [], history: [answer()] }),
 		);
 
-		expect((await waitForAnswer.call(context, turn, FIFTEEN_MINUTES, 0)).id).toBe('a1');
+		expect((await waitForAnswer.call(context, turn, new Deadline(FIFTEEN_MINUTES), 0)).id).toBe(
+			'a1',
+		);
 	});
 
 	it('fails when the turn ended without an answer', async () => {
 		const { context } = routedContext(scriptedConversation({ polls: [idle], messages: [] }));
 
-		await expect(waitForAnswer.call(context, turn, FIFTEEN_MINUTES, 0)).rejects.toMatchObject({
+		await expect(
+			waitForAnswer.call(context, turn, new Deadline(FIFTEEN_MINUTES), 0),
+		).rejects.toMatchObject({
 			message: 'Localmind: The turn ended without an answer',
 		});
 	});
@@ -123,7 +130,7 @@ describe('waitForAnswer', () => {
 			scriptedConversation({ polls: [inSandboxQueue(4)], messages: [answer()] }),
 		);
 
-		await expect(waitForAnswer.call(context, turn, 60_000, 0)).rejects.toMatchObject({
+		await expect(waitForAnswer.call(context, turn, new Deadline(60_000), 0)).rejects.toMatchObject({
 			message:
 				'No answer within 1 minute(s): the agent is still waiting for a free code-execution slot (position 4 in the queue)',
 			description: expect.stringContaining('conversation c1, message u1'),
@@ -134,7 +141,7 @@ describe('waitForAnswer', () => {
 	it('times out while the agent is working', async () => {
 		const { context } = routedContext(scriptedConversation({ polls: [running] }));
 
-		await expect(waitForAnswer.call(context, turn, 60_000, 0)).rejects.toMatchObject({
+		await expect(waitForAnswer.call(context, turn, new Deadline(60_000), 0)).rejects.toMatchObject({
 			message: 'No answer within 1 minute(s): the agent is still working',
 		});
 	});
@@ -160,7 +167,7 @@ describe('waitForAnswer on Localmind up to 1.5.0, without the state endpoint', (
 			}),
 		);
 
-		const result = await waitForAnswer.call(context, turn, FIFTEEN_MINUTES, 0);
+		const result = await waitForAnswer.call(context, turn, new Deadline(FIFTEEN_MINUTES), 0);
 
 		expect(result.content).toBe('Report attached.');
 		expect(sleeps()).toEqual([2_000]);
@@ -179,7 +186,7 @@ describe('waitForAnswer on Localmind up to 1.5.0, without the state endpoint', (
 			}),
 		);
 
-		const result = await waitForAnswer.call(context, turn, FIFTEEN_MINUTES, 0);
+		const result = await waitForAnswer.call(context, turn, new Deadline(FIFTEEN_MINUTES), 0);
 
 		expect(result.content).toBe('Report attached.');
 		expect(requests.map((r) => r.url)).toContain(`${API}/pipeline/r2`);
@@ -197,7 +204,7 @@ describe('waitForAnswer on Localmind up to 1.5.0, without the state endpoint', (
 			}),
 		);
 
-		await expect(waitForAnswer.call(context, turn, 60_000, 0)).rejects.toMatchObject({
+		await expect(waitForAnswer.call(context, turn, new Deadline(60_000), 0)).rejects.toMatchObject({
 			message:
 				'No answer within 1 minute(s): the agent is still waiting for a free code-execution slot (position 2 in the queue)',
 		});
@@ -216,7 +223,7 @@ describe('waitForAnswer on Localmind up to 1.5.0, without the state endpoint', (
 			}),
 		);
 
-		const result = await waitForAnswer.call(context, turn, FIFTEEN_MINUTES, 0);
+		const result = await waitForAnswer.call(context, turn, new Deadline(FIFTEEN_MINUTES), 0);
 
 		expect(result.metadata?.widgets).toEqual([{ type: 'info', info_type: 'sandbox_busy' }]);
 	});
@@ -231,7 +238,9 @@ describe('waitForAnswer on Localmind up to 1.5.0, without the state endpoint', (
 			}),
 		);
 
-		await expect(waitForAnswer.call(context, turn, FIFTEEN_MINUTES, 0)).rejects.toMatchObject({
+		await expect(
+			waitForAnswer.call(context, turn, new Deadline(FIFTEEN_MINUTES), 0),
+		).rejects.toMatchObject({
 			message: 'Localmind: Credits exhausted',
 			description: 'The agent stopped before it answered.',
 		});
@@ -258,7 +267,7 @@ describe('waitForAnswer on Localmind up to 1.5.0, without the state endpoint', (
 			}),
 		);
 
-		const result = await waitForAnswer.call(context, turn, FIFTEEN_MINUTES, 0);
+		const result = await waitForAnswer.call(context, turn, new Deadline(FIFTEEN_MINUTES), 0);
 
 		expect(result.metadata?.code).toBe('context_overflow');
 	});
@@ -268,7 +277,9 @@ describe('waitForAnswer on Localmind up to 1.5.0, without the state endpoint', (
 			scriptedConversation({ polls: [], stateOpenToKeys: false, histories: [[]] }),
 		);
 
-		await expect(waitForAnswer.call(context, turn, FIFTEEN_MINUTES, 0)).rejects.toMatchObject({
+		await expect(
+			waitForAnswer.call(context, turn, new Deadline(FIFTEEN_MINUTES), 0),
+		).rejects.toMatchObject({
 			message: 'Localmind: The turn ended without an answer',
 		});
 	});
@@ -298,7 +309,7 @@ describe('waitForAnswer when a resumed turn does not finish', () => {
 			}),
 		);
 
-		const result = await waitForAnswer.call(context, turn, FIFTEEN_MINUTES, 0);
+		const result = await waitForAnswer.call(context, turn, new Deadline(FIFTEEN_MINUTES), 0);
 
 		expect(result.metadata?.run_id).toBe('r2');
 		expect(requests.map((r) => r.url)).toContain(`${API}/pipeline/r2`);
@@ -314,7 +325,9 @@ describe('waitForAnswer when a resumed turn does not finish', () => {
 			}),
 		);
 
-		await expect(waitForAnswer.call(context, turn, FIFTEEN_MINUTES, 0)).rejects.toMatchObject({
+		await expect(
+			waitForAnswer.call(context, turn, new Deadline(FIFTEEN_MINUTES), 0),
+		).rejects.toMatchObject({
 			message: 'Localmind: The run that resumed the turn ended without saving its answer',
 		});
 		expect(sleeps().reduce((sum, ms) => sum + ms, 0)).toBeGreaterThanOrEqual(2 * 60_000);
@@ -334,7 +347,9 @@ describe('waitForAnswer when a resumed turn does not finish', () => {
 			}),
 		);
 
-		await expect(waitForAnswer.call(context, turn, FIFTEEN_MINUTES, 0)).rejects.toMatchObject({
+		await expect(
+			waitForAnswer.call(context, turn, new Deadline(FIFTEEN_MINUTES), 0),
+		).rejects.toMatchObject({
 			message: 'Localmind: Credit limit exceeded',
 		});
 	});
@@ -350,7 +365,7 @@ describe('waitForAnswer for a turn stopped in the app', () => {
 			}),
 		);
 
-		const result = await waitForAnswer.call(context, turn, FIFTEEN_MINUTES, 0);
+		const result = await waitForAnswer.call(context, turn, new Deadline(FIFTEEN_MINUTES), 0);
 
 		expect(result.metadata?.cancelled).toBe(true);
 	});
@@ -360,7 +375,9 @@ describe('waitForAnswer for a turn stopped in the app', () => {
 			scriptedConversation({ polls: [idle], messages: [], runs: { r1: 'CANCELLED' } }),
 		);
 
-		await expect(waitForAnswer.call(context, turn, FIFTEEN_MINUTES, 0)).rejects.toMatchObject({
+		await expect(
+			waitForAnswer.call(context, turn, new Deadline(FIFTEEN_MINUTES), 0),
+		).rejects.toMatchObject({
 			message: 'Localmind: The turn was stopped',
 		});
 	});
@@ -396,7 +413,7 @@ describe('waitForAnswer with another turn in the same conversation', () => {
 			}),
 		);
 
-		const result = await waitForAnswer.call(context, turn, FIFTEEN_MINUTES, 0);
+		const result = await waitForAnswer.call(context, turn, new Deadline(FIFTEEN_MINUTES), 0);
 
 		expect(result).toMatchObject({ content: 'Report attached.', metadata: { run_id: 'r2' } });
 		expect(requests.filter((r) => r.url === `${API}/pipeline/r2`)).toHaveLength(2);
@@ -415,7 +432,7 @@ describe('waitForAnswer with another turn in the same conversation', () => {
 			}),
 		);
 
-		const result = await waitForAnswer.call(context, turn, FIFTEEN_MINUTES, 0);
+		const result = await waitForAnswer.call(context, turn, new Deadline(FIFTEEN_MINUTES), 0);
 
 		expect(result.id).toBe('a1');
 	});

@@ -197,7 +197,27 @@ describe('Agent → Ask', () => {
 		});
 	});
 
-	it('does not repeat the request after a 429, so an agent does not act twice', async () => {
+	it('repeats a 429 that Localmind 1.7.0 gave before the agent acted', async () => {
+		let calls = 0;
+		const { context, requests } = routedContext(
+			() =>
+				calls++ === 0
+					? {
+							statusCode: 429,
+							headers: { 'retry-after': '1' },
+							body: { error: { message: 'Rate limit', type: 'rate_limit_error' } },
+						}
+					: completion('Three.'),
+			{ agent: AGENT_ID, prompt: 'How many?' },
+		);
+
+		const [item] = await executeAgent.call(context, 'ask', 0);
+
+		expect(item.json.text).toBe('Three.');
+		expect(requests).toHaveLength(2);
+	});
+
+	it('does not repeat a 429 from Localmind up to 1.6.0, so an agent does not act twice', async () => {
 		const { context, requests } = routedContext(
 			() => ({
 				statusCode: 429,

@@ -46,7 +46,12 @@ type RequestOptions = {
 };
 type Route = (options: RequestOptions) => Partial<IN8nHttpFullResponse> | undefined;
 
-type BinaryInput = { mimeType: string; fileName?: string; fileExtension?: string; data: string };
+type BinaryInput = {
+	mimeType: string;
+	fileName?: string;
+	fileExtension?: string;
+	data: string | Buffer;
+};
 
 /**
  * An n8n execution context for whole operations: node parameters from `params`, binary input from

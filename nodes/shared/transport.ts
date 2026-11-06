@@ -12,7 +12,7 @@ import type {
 import { NodeApiError, jsonParse } from 'n8n-workflow';
 
 import { durationText, pause } from './polling';
-import { errorDetail } from './errors';
+import { errorCode, errorDetail } from './errors';
 import {
 	MAX_RETRIES,
 	isRetryable,
@@ -47,11 +47,12 @@ export interface LocalmindRequest {
 	 */
 	idempotent?: boolean;
 	/**
-	 * Whether a 429 may be retried. Localmind usually answers 429 before doing anything, but on
-	 * `/chat/completions` a graph agent can hit the rate limit after its first tools ran, so a
-	 * retry would repeat their side effects. Defaults to true.
+	 * Whether a 429 may be retried, or a check of its body that decides it. Localmind usually
+	 * answers 429 before doing anything, but on `/chat/completions` up to 1.6.0 a graph agent can
+	 * hit the rate limit after its first tools ran, so a retry would repeat their side effects
+	 * (see `rateLimitedBeforeAction`). Defaults to true.
 	 */
-	retryRateLimited?: boolean;
+	retryRateLimited?: boolean | ((body: unknown) => boolean);
 	/** Milliseconds to wait for the response. */
 	timeout?: number;
 	itemIndex?: number;
@@ -133,6 +134,10 @@ export function localmindError(
 		httpCode: String(response.statusCode),
 		itemIndex,
 	});
+	// For callers that explain a refusal by its stable code, such as an attachment's.
+	const code =
+		typeof body === 'object' && body !== null ? errorCode(body as JsonObject) : undefined;
+	if (code) error.context.localmindCode = code;
 	// Without a description of its own, n8n copies the API's detail into it, which the message
 	// already carries ("Localmind: Agent not found … Agent not found").
 	if (!description && error.description && error.message.includes(error.description)) {
@@ -277,7 +282,9 @@ async function send(
 		}
 
 		const body = await errorBody(response, streamed);
-		const retryRateLimited = request.retryRateLimited ?? true;
+		const rateLimitRule = request.retryRateLimited ?? true;
+		const retryRateLimited =
+			typeof rateLimitRule === 'function' ? rateLimitRule(body) : rateLimitRule;
 		if (attempt < MAX_RETRIES && isRetryable(response.statusCode, idempotent, retryRateLimited)) {
 			await pause(this, retryDelay(attempt, parseRetryAfter(response.headers['retry-after'])));
 			continue;

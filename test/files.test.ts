@@ -154,9 +154,15 @@ describe('safeFileName', () => {
 		expect(name.endsWith('.xlsx')).toBe(true);
 	});
 
+	it('counts bytes, so that a long Chinese name fits the 255 bytes of a file system', () => {
+		const name = safeFileName(`${'报'.repeat(100)}.xlsx`);
+		expect(Buffer.byteLength(name)).toBeLessThanOrEqual(200);
+		expect(name).toBe(`${'报'.repeat(65)}.xlsx`);
+	});
+
 	it('never splits a character such as an emoji when shortening', () => {
 		const name = safeFileName(`${'😀'.repeat(300)}.txt`);
-		expect(Array.from(name)).toHaveLength(200);
+		expect(Array.from(name)).toHaveLength(49 + 4);
 		expect(name.endsWith('.txt')).toBe(true);
 		expect(name).not.toMatch(
 			/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,

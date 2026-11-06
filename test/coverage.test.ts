@@ -452,6 +452,41 @@ describe('download limits for generated files', () => {
 		});
 	});
 
+	it('passes on AI-label files without counting them towards the limit (Localmind 1.7.0)', async () => {
+		const { context, requests } = routedContext(() => ({ body: Buffer.from('ok') }));
+		const item: INodeExecutionData = { json: {} };
+
+		await attachGeneratedFiles.call(
+			context,
+			item,
+			[file('a.csv'), file('a.csv.provenance.json'), file('b.csv'), file('c.csv')],
+			settings,
+			0,
+		);
+
+		expect(requests).toHaveLength(3);
+		expect(Object.keys(item.binary ?? {})).toEqual(['file_0', 'file_1', 'file_2']);
+		const listed = item.json.files as IDataObject[];
+		expect(listed[1]).toMatchObject({ fileName: 'a.csv.provenance.json', provenance: true });
+		expect(listed[0]).not.toHaveProperty('provenance');
+		expect(listed[3].errorMessage).toContain("'Max Files to Download'");
+	});
+
+	it('limits AI-label files to a count of their own, so a server cannot send endless ones', async () => {
+		const { context, requests } = routedContext(() => ({ body: Buffer.from('ok') }));
+		const item: INodeExecutionData = { json: {} };
+		const labels = ['a', 'b', 'c'].map((name) => file(`${name}.json.provenance.json`));
+
+		await attachGeneratedFiles.call(context, item, [...labels, file('a.json')], settings, 0);
+
+		expect(requests).toHaveLength(3);
+		expect(Object.keys(item.binary ?? {})).toEqual(['file_0', 'file_1', 'file_3']);
+		const listed = item.json.files as IDataObject[];
+		expect(listed[2].errorMessage).toBe(
+			"Not downloaded: more than 2 AI-label files ('Max Files to Download')",
+		);
+	});
+
 	it('skips a file Localmind reports as too large without downloading it', async () => {
 		const { context, requests } = routedContext(() => ({ body: Buffer.from('ok') }));
 		const item: INodeExecutionData = { json: {} };

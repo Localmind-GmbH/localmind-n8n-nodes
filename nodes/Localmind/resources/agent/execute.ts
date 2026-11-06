@@ -12,6 +12,7 @@ import {
 import { attachGeneratedFiles, downloadSettings } from '../../../shared/files';
 import { commaList, textParam } from '../../../shared/params';
 import { completionTimeoutMs } from '../../../shared/polling';
+import { rateLimitedBeforeAction } from '../../../shared/retry';
 import { localmindApiRequest } from '../../../shared/transport';
 import { getLimit } from '../common';
 import {
@@ -37,8 +38,9 @@ async function ask(this: IExecuteFunctions, itemIndex: number): Promise<INodeExe
 		path: '/chat/completions',
 		body: askRequest(agentId, prompt, options, attachments),
 		timeout,
-		// A graph agent can hit the rate limit after its first tools ran; a retry would repeat them.
-		retryRateLimited: false,
+		// Up to Localmind 1.6.0 a graph agent can hit the rate limit after its first tools ran; a
+		// retry would repeat them.
+		retryRateLimited: rateLimitedBeforeAction,
 		itemIndex,
 	})) as AskResponse;
 

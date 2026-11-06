@@ -6,6 +6,7 @@ import {
 	localmindApiRequestAllItems,
 	localmindApiStream,
 } from '../nodes/shared/transport';
+import { rateLimitedBeforeAction } from '../nodes/shared/retry';
 import { byteStream, fakeContext, node } from './helpers';
 
 vi.mock('n8n-workflow', async (importOriginal) => ({
@@ -219,6 +220,36 @@ describe('localmindApiRequest', () => {
 
 		await expect(request).rejects.toMatchObject({ httpCode: '429' });
 		expect(httpRequestWithAuthentication).toHaveBeenCalledTimes(1);
+	});
+
+	it.each([
+		[
+			'Localmind 1.7.0 (before the agent acted)',
+			{ error: { message: 'Rate limit', type: 'rate_limit_error' } },
+			2,
+		],
+		['a proxy page (never reached Localmind)', '<html>429 Too Many Requests</html>', 2],
+		[
+			'Localmind up to 1.6.0 (maybe after tools ran)',
+			{ detail: 'Rate limit exceeded', error_code: 'RATE_LIMIT_EXCEEDED' },
+			1,
+		],
+	])('decides from the body whether to repeat a 429: %s', async (_case, body, calls) => {
+		const { context, httpRequestWithAuthentication } = fakeContext([
+			{ statusCode: 429, headers: { 'retry-after': '0' }, body },
+			{ body: { choices: [] } },
+		]);
+
+		await localmindApiRequest
+			.call(context, {
+				method: 'POST',
+				path: '/chat/completions',
+				body: {},
+				retryRateLimited: rateLimitedBeforeAction,
+			})
+			.catch(() => undefined);
+
+		expect(httpRequestWithAuthentication).toHaveBeenCalledTimes(calls);
 	});
 
 	it('sends an empty JSON body as "{}", which n8n would otherwise drop', async () => {

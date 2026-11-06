@@ -35,6 +35,13 @@ function sendMessageApi(answerMessage = answer()) {
 		if (options.method === 'POST' && options.url === `${API}/conversations/c1/messages-async`) {
 			return { statusCode: 202, body: queuedTurn };
 		}
+		// A Localmind before 1.7.0: the conversation is there, the upload route takes no API key.
+		if (options.method === 'GET' && options.url === `${API}/conversations/c1`) {
+			return { body: { id: 'c1', space_id: 's1', agent_id: 'ag1' } };
+		}
+		if (options.url === `${API}/chat/attachments/parse-async`) {
+			return { statusCode: 401, body: { detail: 'Not authenticated' } };
+		}
 		if (options.url === `https://acme-api.example.com${fileUrl}`) {
 			return {
 				body: Buffer.from('xlsx'),
@@ -64,6 +71,85 @@ const withFile = answer({
 });
 
 describe('Conversation → Send Message', () => {
+	it('uploads files for the conversation on Localmind 1.7.0, reading the conversation once', async () => {
+		const base = sendMessageApi();
+		let uploads = 0;
+		const route = (options: { method: string; url: string; body?: unknown }) => {
+			if (options.method === 'GET' && options.url === `${API}/conversations/c1`) {
+				// A conversation handed over to another agent: the file is for that one.
+				return { body: { id: 'c1', space_id: 's1', agent_id: 'ag1', active_agent_id: 'ag2' } };
+			}
+			if (options.url === `${API}/chat/attachments/parse-async`) {
+				return { statusCode: 202, body: { run_id: `upload-${++uploads}` } };
+			}
+			const upload = /\/pipeline\/(upload-\d+)$/.exec(options.url)?.[1];
+			if (upload) {
+				return {
+					body: { status: 'COMPLETED', result_data: { type: 'file', object_path: upload } },
+				};
+			}
+			return base(options);
+		};
+		const { context, requests } = routedContext(
+			route,
+			{
+				conversation: 'c1',
+				message: 'Fix the sheet',
+				waitForAnswer: true,
+				options: { attachments: 'contract, sheet' },
+			},
+			{
+				contract: { mimeType: 'application/pdf', fileName: 'contract.pdf', data: '%PDF' },
+				sheet: { mimeType: 'application/vnd.ms-excel', fileName: 'sheet.xls', data: 'xls' },
+			},
+		);
+
+		await executeConversation.call(context, 'sendMessage', 0);
+
+		const conversationReads = requests.filter(
+			(request) => request.method === 'GET' && request.url === `${API}/conversations/c1`,
+		);
+		expect(conversationReads).toHaveLength(1);
+		const uploaded = requests.filter((request) => request.url.endsWith('/parse-async'));
+		expect(uploaded.map((request) => request.qs)).toEqual([
+			{ space_id: 's1', persist: 'true', conversation_id: 'c1', agent_id: 'ag2' },
+			{ space_id: 's1', persist: 'true', conversation_id: 'c1', agent_id: 'ag2' },
+		]);
+		const sent = requests.find((request) => request.url.endsWith('/messages-async'));
+		expect(sent?.body).toEqual({
+			message: 'Fix the sheet',
+			attachments: [
+				{ type: 'file', object_path: 'upload-1' },
+				{ type: 'file', object_path: 'upload-2' },
+			],
+		});
+	});
+
+	it("explains Localmind 1.7.0's refusal of the message's images by the space's chat settings", async () => {
+		const base = sendMessageApi();
+		const { context } = routedContext(
+			(options: { method: string; url: string }) =>
+				options.url.endsWith('/messages-async')
+					? {
+							statusCode: 400,
+							body: { detail: 'Images are stored only', code: 'upload_type_unsupported' },
+						}
+					: base(options),
+			{
+				conversation: 'c1',
+				message: 'What is this?',
+				waitForAnswer: true,
+				options: { attachments: 'photo' },
+			},
+			{ photo: { mimeType: 'image/png', fileName: 'photo.png', data: 'png' } },
+		);
+
+		await expect(executeConversation.call(context, 'sendMessage', 0)).rejects.toMatchObject({
+			message: 'Localmind refused the images of the message (upload_type_unsupported)',
+			description: expect.stringContaining("space's chat settings"),
+		});
+	});
+
 	it('sends attachments and disabled tools, waits, and returns the answer with its files', async () => {
 		const { context, requests } = routedContext(
 			sendMessageApi(withFile),
@@ -78,7 +164,8 @@ describe('Conversation → Send Message', () => {
 
 		const [item] = await executeConversation.call(context, 'sendMessage', 0);
 
-		expect(requests[0].body).toEqual({
+		const sent = requests.find((request) => request.url.endsWith('/messages-async'));
+		expect(sent?.body).toEqual({
 			message: 'Make a report',
 			attachments: [
 				{ type: 'file', content: 'Q3 numbers', filename: 'notes.txt', media_type: 'text/plain' },

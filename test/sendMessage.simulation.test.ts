@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { executeConversation } from '../nodes/Localmind/resources/conversation/execute';
 import { waitForAnswer } from '../nodes/Localmind/resources/conversation/sendMessage';
+import { Deadline } from '../nodes/shared/polling';
 import { API } from './fakeConversation';
 import { routedContext } from './helpers';
 import { FINAL, simulatedLocalmind, type Scenario } from './simulatedLocalmind';
@@ -31,7 +32,7 @@ const elapsed = () => vi.mocked(sleep).mock.calls.reduce((sum, [ms]) => sum + ms
 
 async function wait(scenario: Scenario) {
 	const { context } = routedContext(simulatedLocalmind(scenario));
-	return await waitForAnswer.call(context, turn, FIFTEEN_MINUTES, 0);
+	return await waitForAnswer.call(context, turn, new Deadline(FIFTEEN_MINUTES), 0);
 }
 
 const parked = { firstRunEndsAt: 5_000, parkedUntil: 3 * MINUTE };
@@ -305,7 +306,9 @@ describe('Send Message against a server that keeps naming new runs', () => {
 		const hostile = hostileLocalmind(stateEndpoint);
 		const { context } = routedContext(hostile.route);
 
-		await expect(waitForAnswer.call(context, turn, FIFTEEN_MINUTES, 0)).rejects.toMatchObject({
+		await expect(
+			waitForAnswer.call(context, turn, new Deadline(FIFTEEN_MINUTES), 0),
+		).rejects.toMatchObject({
 			message: 'Localmind named more than 50 runs for this message',
 		});
 		expect(hostile.requests()).toBeLessThan(250);
@@ -316,7 +319,7 @@ describe('Send Message against a server that keeps naming new runs', () => {
 		const { context } = routedContext(hostile.route);
 
 		// The run limit, not the timeout, ends it: a run found at the deadline may hold the answer.
-		await expect(waitForAnswer.call(context, turn, 0, 0)).rejects.toMatchObject({
+		await expect(waitForAnswer.call(context, turn, new Deadline(0), 0)).rejects.toMatchObject({
 			message: 'Localmind named more than 50 runs for this message',
 		});
 		expect(hostile.requests()).toBeLessThan(250);

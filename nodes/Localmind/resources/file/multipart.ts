@@ -7,10 +7,19 @@ export interface MultipartFile {
 	fileName: string;
 	mimeType: string;
 	data: Buffer;
+	/**
+	 * Send the file name as it is, in UTF-8 as browsers do, for an endpoint that stores the file
+	 * under this name (a chat attachment). Otherwise it is reduced to ASCII: File → Upload's
+	 * stored name comes from its "path" field, and this name only helps the server guess the type.
+	 */
+	exactName?: boolean;
 }
 
-// The header file name only helps the server guess the type; the stored name comes from "path".
 const headerSafe = (value: string) => value.replace(/[^\x20-\x7e]|["\\]/g, '_');
+
+/** A UTF-8 name as browsers send it: line breaks and quotes percent-encoded (WHATWG form encoding). */
+const browserName = (value: string) =>
+	value.replace(/[\r\n"]/g, (char) => encodeURIComponent(char));
 
 /** A multipart/form-data body with text fields and one file, built without a form library. */
 export function multipartBody(
@@ -28,7 +37,7 @@ export function multipartBody(
 	}
 	parts.push(
 		Buffer.from(
-			`--${boundary}\r\nContent-Disposition: form-data; name="${file.field}"; filename="${headerSafe(file.fileName)}"\r\nContent-Type: ${safeMimeType(file.mimeType)}\r\n\r\n`,
+			`--${boundary}\r\nContent-Disposition: form-data; name="${file.field}"; filename="${file.exactName ? browserName(file.fileName) : headerSafe(file.fileName)}"\r\nContent-Type: ${safeMimeType(file.mimeType)}\r\n\r\n`,
 		),
 		file.data,
 		Buffer.from(`\r\n--${boundary}--\r\n`),

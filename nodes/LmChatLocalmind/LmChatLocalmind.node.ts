@@ -9,6 +9,7 @@ import { supplyModel } from '@n8n/ai-node-sdk';
 
 import { agentLocator, searchAgents } from '../shared/agents';
 import { completionTimeoutMs } from '../shared/polling';
+import { rateLimitedBeforeAction } from '../shared/retry';
 import { localmindApiRequest, localmindApiStream } from '../shared/transport';
 import { LocalmindChatModel, type ChatCompletionResponse } from './model';
 
@@ -108,9 +109,10 @@ export class LmChatLocalmind implements INodeType {
 						path: '/chat/completions',
 						body: { ...body },
 						timeout,
-						// Without streaming, a graph agent can hit the rate limit after its first tools
-						// ran; a retry would repeat them. A streaming request gets its 429 before that.
-						retryRateLimited: false,
+						// Without streaming, up to Localmind 1.6.0, a graph agent can hit the rate limit
+						// after its first tools ran; a retry would repeat them. A streaming request gets
+						// its 429 before that.
+						retryRateLimited: rateLimitedBeforeAction,
 					})) as ChatCompletionResponse,
 				stream: async (body) =>
 					await localmindApiStream.call(this, {

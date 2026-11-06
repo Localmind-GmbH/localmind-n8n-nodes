@@ -147,7 +147,11 @@ export function binaryMimeType(...mimeTypes: Array<string | undefined>): string 
 		.find(Boolean);
 }
 
-const MAX_FILE_NAME_LENGTH = 200;
+/**
+ * File systems and Localmind's code sandbox take names of up to 255 bytes; 200 leave room for a
+ * number such as " (2)". Counted in UTF-8 bytes: a Chinese character takes three.
+ */
+const MAX_FILE_NAME_BYTES = 200;
 
 /**
  * Control characters, and the direction marks that can disguise an extension: U+202E in
@@ -161,7 +165,7 @@ const isHiddenCharacter = (code: number) =>
 
 /**
  * A file name from Localmind, safe for the steps after the node (saving the file, attaching it to a
- * mail): its last path segment only, without hidden characters, at most 200 characters.
+ * mail): its last path segment only, without hidden characters, at most 200 bytes.
  */
 export function safeFileName(name: string | undefined): string {
 	const last = (name ?? '').split(/[/\\]/).pop() ?? '';
@@ -170,13 +174,18 @@ export function safeFileName(name: string | undefined): string {
 		.join('')
 		.trim();
 	const usable = visible === '.' || visible === '..' ? '' : visible;
-	// Counted in characters, not UTF-16 units, so that shortening never splits one such as an emoji.
-	const characters = Array.from(usable);
-	if (characters.length <= MAX_FILE_NAME_LENGTH) return usable || 'file';
+	if (Buffer.byteLength(usable) <= MAX_FILE_NAME_BYTES) return usable || 'file';
 	const dot = usable.lastIndexOf('.');
 	const extension = dot > 0 && usable.length - dot <= 16 ? usable.slice(dot) : '';
-	const kept = MAX_FILE_NAME_LENGTH - Array.from(extension).length;
-	return characters.slice(0, kept).join('') + extension;
+	let room = MAX_FILE_NAME_BYTES - Buffer.byteLength(extension);
+	let kept = '';
+	// Whole characters only, so that shortening never splits one such as an emoji.
+	for (const char of usable.slice(0, usable.length - extension.length)) {
+		room -= Buffer.byteLength(char);
+		if (room < 0) break;
+		kept += char;
+	}
+	return kept + extension;
 }
 
 /**
@@ -184,8 +193,22 @@ export function safeFileName(name: string | undefined): string {
  * mail from it. The link stays as Localmind sent it, for File → Download by URL.
  */
 export function fileDetails({ fileName, size, mimeType, url }: GeneratedFile): IDataObject {
-	return { fileName: safeFileName(fileName), size, mimeType: binaryMimeType(mimeType), url };
+	return {
+		fileName: safeFileName(fileName),
+		size,
+		mimeType: binaryMimeType(mimeType),
+		url,
+		...(isProvenanceFile(fileName) && { provenance: true }),
+	};
 }
+
+/**
+ * From Localmind 1.7.0, an AI label (EU AI Act) for a generated file whose format has no room for
+ * one, such as a CSV or JSON file: "<file name>.provenance.json". It is passed on with the file,
+ * but not counted towards 'Max Files to Download'; the labels have their own count, of the same size.
+ */
+export const isProvenanceFile = (fileName: string) =>
+	fileName.toLowerCase().endsWith('.provenance.json');
 
 /** The prefix of the binary fields for generated files: file_0, file_1, … */
 export const DEFAULT_BINARY_PREFIX = 'file_';
@@ -252,14 +275,18 @@ export async function attachGeneratedFiles(
 
 	const megabytes = `${Math.round(settings.maxBytes / 1024 / 1024)} MB`;
 	const binary: IBinaryKeyData = {};
+	// AI labels have a count of their own, so they cannot push a file out, nor a server send endless ones.
+	const counts = { files: 0, labels: 0 };
 	for (const [index, file] of files.entries()) {
+		const kind = isProvenanceFile(file.fileName) ? 'labels' : 'files';
+		const beyondLimit = counts[kind]++ >= settings.maxFiles;
 		if (!isSafeDownloadPath(file.path)) {
 			details[index].errorMessage = UNSAFE_LINK_REFUSAL;
 			continue;
 		}
-		if (index >= settings.maxFiles) {
+		if (beyondLimit) {
 			details[index].errorMessage =
-				`Not downloaded: more than ${settings.maxFiles} files ('Max Files to Download')`;
+				`Not downloaded: more than ${settings.maxFiles} ${kind === 'labels' ? 'AI-label files' : 'files'} ('Max Files to Download')`;
 			continue;
 		}
 		if (typeof file.size === 'number' && file.size > settings.maxBytes) {

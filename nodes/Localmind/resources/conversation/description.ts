@@ -133,7 +133,7 @@ export const conversationProperties: INodeProperties[] = [
 	// Send Message
 	{
 		displayName:
-			'Send Message keeps the history and waits when all code sandboxes are busy. For one answer with your own system message, temperature or JSON output, or to give the agent PDF or Office documents, use Agent → Ask.',
+			'Send Message keeps the history and waits when all code sandboxes are busy. For one answer with your own system message, temperature or JSON output, or, before Localmind 1.7.0, to give the agent PDF or Office documents, use Agent → Ask.',
 		name: 'sendMessageNotice',
 		type: 'notice',
 		default: '',
@@ -173,7 +173,7 @@ export const conversationProperties: INodeProperties[] = [
 				default: 'data',
 				placeholder: 'e.g. data, invoice',
 				description:
-					'Names of the input binary fields to attach, separated by commas. Images and text files only.',
+					'Names of the input binary fields to attach, separated by commas. JPEG, PNG, GIF and WebP images go to the model. From Localmind 1.7.0, other files (PDF, Office, CSV, …) are uploaded for the conversation, and the agent gets their text and the original in its code sandbox; a text file of a type the space does not take goes along as text. Before 1.7.0, images and text files only.',
 			},
 			{
 				displayName: 'Binary Field Prefix',
@@ -231,7 +231,7 @@ export const conversationProperties: INodeProperties[] = [
 				typeOptions: { minValue: 1, maxValue: 1440 },
 				default: 15,
 				description:
-					'How long to wait for the answer. After a timeout the agent keeps working in Localmind, and the error says what it was doing.',
+					'How long to wait for the answer. After a timeout the agent keeps working in Localmind, and the error says what it was doing. Processing the attachments before the message is sent has a wait of the same length of its own.',
 			},
 		],
 	},

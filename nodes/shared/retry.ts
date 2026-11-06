@@ -20,6 +20,24 @@ export function isRetryable(
 	return idempotent && statusCode >= 500 && statusCode <= 599;
 }
 
+/**
+ * Whether a 429 from `/chat/completions` came before the agent acted, so that a retry repeats
+ * nothing. From Localmind 1.7.0 the endpoint answers a rate limit as an HTTP error only then, in
+ * OpenAI's format (`{"error": {"type": "rate_limit_error"}}`), and reports later failures in the
+ * answer. A text answer (a page from nginx or another proxy) never reached Localmind. Up to 1.6.0
+ * Localmind answers `{"detail": …}`, possibly after a graph agent's first tools ran: not retried.
+ */
+export function rateLimitedBeforeAction(body: unknown): boolean {
+	if (typeof body === 'string') return true;
+	if (typeof body !== 'object' || body === null) return false;
+	const { error } = body as { error?: unknown };
+	return (
+		typeof error === 'object' &&
+		error !== null &&
+		(error as { type?: unknown }).type === 'rate_limit_error'
+	);
+}
+
 /** A Retry-After header (seconds or an HTTP date) in milliseconds, or undefined if absent or unreadable. */
 export function parseRetryAfter(header: unknown, now: number = Date.now()): number | undefined {
 	const raw = Array.isArray(header) ? header[0] : header;
