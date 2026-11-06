@@ -106,6 +106,8 @@ A chat model sub-node for n8n's AI Agent and chains. The selected Localmind agen
 
 ## Development
 
+Needs Node.js 22.12 or later, which the test framework requires. The published package itself runs on the Node.js of your n8n.
+
 ```bash
 npm ci
 npm run dev      # n8n with the nodes and hot reload on http://localhost:5678
