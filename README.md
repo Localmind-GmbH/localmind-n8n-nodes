@@ -118,6 +118,10 @@ npm run check:package  # after the build: only the expected files, nothing secre
 
 Every pull request and every push to `main` runs lint, type check, tests and build, verifies the dependencies' signatures and checks the package contents. Releases are built and published by GitHub Actions with npm provenance, after a maintainer's approval.
 
+## Security
+
+Please report security problems privately, not in a public issue. The [security policy](https://github.com/Localmind-GmbH/localmind-n8n-nodes/blob/main/SECURITY.md) says how.
+
 ## License
 
 [MIT](LICENSE.md)

@@ -27,6 +27,7 @@ One-time steps:
   - A ruleset for `main`: changes only through pull requests with a review and a passing CI check, no force pushes.
   - 2FA required for the GitHub organization, and few maintainers.
   - The repository public before the first tag: npm provenance and GitHub's build attestations need a public repository. `repository.url` in `package.json` names it, and npm provenance requires the two to match. The README links the customer guide in that repository, and `check:package` allows GitHub links only into it, so a new name changes all three.
+  - On GitHub's Free plan, rulesets and the environment's required reviewers take effect only in a public repository. Right after making it public: add the reviewers to `npm-publish` (with "Prevent self-review", without administrator bypass), and turn on private vulnerability reporting (which `SECURITY.md` points to), secret scanning with push protection and CodeQL's default setup under Settings → Advanced Security.
 - **README.** Before publishing, check that it holds nothing internal (ticket numbers, status notes, internal links).
 - **Package contents.** `npm run check:package` (`scripts/check-package.mjs`) checks them on every pull request and right before every publish. It fails when the package contains:
   - files other than `dist/`, `README.md`, `package.json` and a license
