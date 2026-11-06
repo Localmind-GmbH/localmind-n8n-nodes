@@ -28,7 +28,9 @@ jobs:
           node-version: 22
           cache: npm
 
-      - run: npm ci
+      # No install scripts: a dev tool fetches and runs a package from npm that the lockfile
+      # does not pin. None of them is needed; the package comes out byte for byte the same.
+      - run: npm ci --ignore-scripts
       - run: npm audit signatures
       - run: npm run lint
       - run: npm run typecheck

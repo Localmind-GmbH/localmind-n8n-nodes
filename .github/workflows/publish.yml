@@ -1,41 +1,39 @@
-# Publishes the package to npm with a provenance statement on every version tag, then
-# attaches the published package with a signed attestation to a GitHub release.
+# Publishes the package to npm with a provenance statement, then creates the version tag and a
+# GitHub release with the published package and a signed attestation.
 # n8n requires provenance for verified community nodes. Provenance proves that the
 # package was built by this workflow, from this repository and commit.
 #
+# A release is started by hand, from main only: Actions > Publish > Run workflow. The version
+# comes from package.json, raised beforehand in a reviewed pull request; a second maintainer
+# then approves the run. Tags start nothing: the workflow creates them after publishing.
+#
 # Three jobs, so that publishing rights never meet third-party code:
-#   build    installs the dev tools (some run install scripts), checks and packs the
-#            package. It has no publishing rights and sees no npm token.
+#   build    checks that the version is new, installs the dev tools (without their install
+#            scripts), checks and packs the package. No publishing rights, no npm token.
 #   publish  installs nothing. After a reviewer's approval it publishes exactly the file
 #            the build job packed, checked by its SHA-256.
-#   github-release  attaches the package as npm serves it to a GitHub release.
+#   github-release  checks that npm serves that file, then tags the commit and attaches the
+#            file with its attestation to a GitHub release.
 #
 # One-time setup on GitHub:
 #   Settings > Environments > "npm-publish": required reviewers (a second maintainer
-#   approves every publish), "Prevent self-review", deployment tags limited to "v*.*.*".
-#   Settings > Rules > a tag ruleset for "v*.*.*": only maintainers may create, update
-#   or delete version tags.
+#   approves every publish), "Prevent self-review", no administrator bypass, deployment
+#   branches limited to "main".
+#   Settings > Rules > a tag ruleset for "v*.*.*": restrict updates and deletions, block
+#   force pushes (creations stay allowed: this workflow creates the tags).
+#   Settings > General > Releases: release immutability.
 #
 # One-time setup on npmjs.com (trusted publishing, no long-lived token):
 #   Package settings > Trusted Publishers > GitHub Actions: repository owner and name
 #   of this repository, workflow "publish.yml", environment "npm-publish".
-#   A trusted publisher can only be added to a package that exists: publish the
-#   first version with an npm token. Add it as the secret NPM_TOKEN of the
-#   "npm-publish" environment (granular access token with publish rights and a short
-#   expiry), push the first tag, then add the trusted publisher, delete the secret and
-#   revoke the token. Then set Publishing access to "Require two-factor authentication
-#   and disallow tokens".
+#   A trusted publisher can only be added to a package that exists: the first version is
+#   published with an npm token in the "npm-publish" environment (see RELEASING.md).
 #   package.json's repository.url must name this GitHub repository for provenance.
-#
-# Release: update CHANGELOG.md, then `npm version <major|minor|patch>` and
-# `git push --follow-tags`; the tag starts this workflow (see RELEASING.md).
 
 name: Publish
 
 on:
-  push:
-    tags:
-      - 'v*.*.*'
+  workflow_dispatch:
 
 # One release at a time; a running publish is never cancelled.
 concurrency:
@@ -51,6 +49,7 @@ jobs:
       contents: read
     outputs:
       package: ${{ steps.version.outputs.package }}
+      tag: ${{ steps.version.outputs.tag }}
       file: ${{ steps.pack.outputs.file }}
       sha256: ${{ steps.pack.outputs.sha256 }}
     steps:
@@ -64,17 +63,50 @@ jobs:
           # No dependency cache in a release: a poisoned cache could change what is published.
           package-manager-cache: false
 
-      - name: Check that the tag matches the package version
+      - name: Check that it runs on main, for a version not released yet
         id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          version=$(node -p "require('./package.json').version")
-          if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match version $version in package.json"
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "::error::Releases run from main only, not from $GITHUB_REF"
             exit 1
           fi
-          echo "package=$(node -p "require('./package.json').name")@$version" >> "$GITHUB_OUTPUT"
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          tag="v$version"
+          if lookup=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --silent 2>&1); then
+            echo "::error::Tag $tag exists already: raise the version in package.json first"
+            exit 1
+          elif ! echo "$lookup" | grep -q 'HTTP 404'; then
+            echo "::error::Could not check the tags: $lookup"
+            exit 1
+          fi
+          if [ -n "$(npm view "$name@$version" version 2>/dev/null)" ]; then
+            echo "::error::$name@$version is on npm already: raise the version in package.json first"
+            exit 1
+          fi
+          # npm publishes a prerelease, or a version below the latest, only with a tag of its
+          # own; refused here, before anyone approves the run.
+          if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Version $version is not of the form X.Y.Z; prereleases are not published by this workflow"
+            exit 1
+          fi
+          latest=$(npm view "$name" dist-tags.latest 2>/dev/null || true)
+          if [ -n "$latest" ] && ! node -e '
+            const [a, b] = process.argv.slice(1).map((v) => v.split(".").map(Number));
+            const order = a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+            process.exit(order > 0 ? 0 : 1);
+          ' "$version" "$latest"; then
+            echo "::error::Version $version is not higher than the latest on npm, $latest"
+            exit 1
+          fi
+          echo "package=$name@$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
-      - run: npm ci
+      # No install scripts: a dev tool fetches and runs a package from npm that the lockfile
+      # does not pin. None of them is needed; the package comes out byte for byte the same.
+      - run: npm ci --ignore-scripts
       # Fails when a dependency's registry signature or attestation does not verify.
       - run: npm audit signatures
       - run: npm run lint
@@ -102,7 +134,7 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
-    # Waits for a reviewer's approval; only version tags may deploy to this environment.
+    # Waits for a reviewer's approval; only main may deploy to this environment.
     environment: npm-publish
     permissions:
       id-token: write # OIDC token for npm trusted publishing and provenance
@@ -140,7 +172,7 @@ jobs:
     needs: [build, publish]
     runs-on: ubuntu-latest
     permissions:
-      contents: write # create the release
+      contents: write # create the tag and the release
       id-token: write # sign the attestation
       attestations: write # store the attestation
     steps:
@@ -175,11 +207,12 @@ jobs:
         with:
           subject-path: '*.tgz'
 
-      - name: Create the GitHub release
+      - name: Tag the commit and create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.build.outputs.tag }}
         run: |
           file=$(ls -- *.tgz)
-          gh release create "$GITHUB_REF_NAME" "$file" SHA256SUMS \
-            --repo "$GITHUB_REPOSITORY" --verify-tag --title "$GITHUB_REF_NAME" \
+          gh release create "$TAG" "$file" SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$TAG" \
             --notes "The package as published on npm, for installation without npm access (customer guide, offline installation). Verify it before installing: \`gh attestation verify $file --repo $GITHUB_REPOSITORY\`, or compare its SHA-256 with SHA256SUMS. Changes: see CHANGELOG.md."

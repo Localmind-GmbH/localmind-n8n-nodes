@@ -1,7 +1,23 @@
-# Keeps the GitHub Actions pinned to commit SHAs in the workflows current.
+# Keeps the GitHub Actions pinned to commit SHAs in the workflows current, and the dev tools in
+# the lockfile. None of the npm packages ships to customers: the package has no dependencies.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: monthly
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    # A version is proposed only once it is a week old: a hijacked release is usually found and
+    # pulled within days.
+    cooldown:
+      default-days: 7
+    groups:
+      dev-tools:
+        patterns:
+          - '*'
