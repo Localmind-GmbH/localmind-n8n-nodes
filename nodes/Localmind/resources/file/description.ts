@@ -175,4 +175,23 @@ export const fileProperties: INodeProperties[] = [
 		displayOptions: showFor(['download', 'downloadByUrl']),
 		description: 'The name of the output binary field to put the file in',
 	},
+	{
+		displayName: 'Options',
+		name: 'options',
+		type: 'collection',
+		placeholder: 'Add Option',
+		default: {},
+		displayOptions: showFor(['download', 'downloadByUrl']),
+		options: [
+			{
+				displayName: 'Max File Size (MB)',
+				name: 'maxFileSizeMb',
+				type: 'number',
+				typeOptions: { minValue: 1 },
+				default: 50,
+				description:
+					'A larger file is not downloaded, and the node stops with an error. The download stops at this size, so a larger file never fills the memory of n8n.',
+			},
+		],
+	},
 ];

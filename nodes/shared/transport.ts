@@ -9,9 +9,9 @@ import type {
 	ISupplyDataFunctions,
 	JsonObject,
 } from 'n8n-workflow';
-import { NodeApiError, jsonParse } from 'n8n-workflow';
+import { NodeApiError, NodeOperationError, jsonParse } from 'n8n-workflow';
 
-import { durationText, pause } from './polling';
+import { durationText, isCancelled, pause } from './polling';
 import { errorCode, errorDetail } from './errors';
 import {
 	MAX_RETRIES,
@@ -75,25 +75,79 @@ const MAX_PAGES = 1000;
 /** An error answer is read up to this size; an error message never needs more. */
 const MAX_ERROR_BODY_BYTES = 64 * 1024;
 
-async function readStream(body: unknown): Promise<string> {
+/** A stream that sent nothing for longer than allowed. */
+export class StalledStream extends Error {}
+
+/**
+ * The next chunk of a stream, or a StalledStream error after `idleMs` without one. Once the chunk
+ * is there, nothing refers to it from the timer any more: the listener goes, and Node frees an
+ * unused timeout signal with its timer. (setTimeout is not open to community nodes, and n8n 2.41
+ * has no sleepWithAbort.)
+ */
+async function nextWithin<T>(next: Promise<T>, idleMs: number): Promise<T> {
+	const signal = AbortSignal.timeout(idleMs);
+	return await new Promise<T>((resolve, reject) => {
+		const onStall = () => reject(new StalledStream('No data'));
+		signal.addEventListener('abort', onStall, { once: true });
+		next.then(
+			(value) => {
+				signal.removeEventListener('abort', onStall);
+				resolve(value);
+			},
+			(error: unknown) => {
+				signal.removeEventListener('abort', onStall);
+				reject(error);
+			},
+		);
+	});
+}
+
+/**
+ * Reads a streamed body until it ends or `limit` bytes have arrived, whichever comes first, and
+ * closes the stream on every way out, so the rest is never received. With `idleMs`, a stream that
+ * sends nothing for that long fails. Takes a body that is already bytes as well.
+ */
+export async function readUpTo(body: unknown, limit: number, idleMs?: number): Promise<Buffer> {
+	if (Buffer.isBuffer(body)) return body.subarray(0, limit);
+	if (typeof body === 'string') return Buffer.from(body).subarray(0, limit);
+	const stream = body as AsyncIterable<Buffer | Uint8Array | string> & { destroy?: () => void };
+	const iterator = stream[Symbol.asyncIterator]();
 	const chunks: Buffer[] = [];
 	let size = 0;
-	for await (const chunk of body as AsyncIterable<Buffer | string>) {
-		const bytes = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
-		chunks.push(bytes);
-		size += bytes.length;
-		// Leaving the loop closes the stream.
-		if (size >= MAX_ERROR_BODY_BYTES) break;
+	try {
+		while (size < limit) {
+			const next = idleMs ? await nextWithin(iterator.next(), idleMs) : await iterator.next();
+			if (next.done) break;
+			const chunk = next.value;
+			const bytes =
+				typeof chunk === 'string'
+					? Buffer.from(chunk)
+					: Buffer.isBuffer(chunk)
+						? chunk
+						: Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+			chunks.push(bytes);
+			size += bytes.length;
+		}
+	} finally {
+		// Destroyed first: closing a stalled stream politely could wait as long as it stalls.
+		stream.destroy?.();
+		void iterator.return?.().catch(() => undefined);
 	}
-	return Buffer.concat(chunks).subarray(0, MAX_ERROR_BODY_BYTES).toString('utf8');
+	return Buffer.concat(chunks, Math.min(size, limit));
+}
+
+async function readStream(body: unknown): Promise<string> {
+	return (await readUpTo(body, MAX_ERROR_BODY_BYTES, 30_000)).toString('utf8');
 }
 
 /** The body of a failed response, decoded when it arrived as a stream or as bytes. */
 async function errorBody(response: IN8nHttpFullResponse, streamed: boolean): Promise<unknown> {
 	let text: string | undefined;
 	try {
-		if (streamed) text = await readStream(response.body);
-		else if (Buffer.isBuffer(response.body)) {
+		const body: unknown = response.body;
+		if (streamed && typeof body === 'object' && body !== null && Symbol.asyncIterator in body) {
+			text = await readStream(body);
+		} else if (Buffer.isBuffer(response.body)) {
 			text = response.body.subarray(0, MAX_ERROR_BODY_BYTES).toString('utf8');
 		}
 	} catch {
@@ -107,6 +161,27 @@ async function errorBody(response: IN8nHttpFullResponse, streamed: boolean): Pro
 /** At most this many characters of Localmind's error text reach the node's error. */
 const MAX_DETAIL_LENGTH = 1000;
 
+/**
+ * The longest a request may go without any data from Localmind, unless it sets its own timeout:
+ * a server that accepts the connection and then says nothing would otherwise hold the node until
+ * n8n's execution timeout, if there is one.
+ */
+const DEFAULT_TIMEOUT_MS = 5 * 60_000;
+
+/**
+ * The timeout of requests that send a file (File → Upload, attachments): it also covers sending
+ * the file, which over a slow link takes long.
+ */
+export const UPLOAD_TIMEOUT_MS = 60 * 60_000;
+
+/** The longest a download may go without data once it has started. */
+const DOWNLOAD_IDLE_MS = 5 * 60_000;
+
+/** An error text with the API key masked, in case Localmind or a proxy echoes the request. */
+function masked(text: string, apiKey: string | undefined): string {
+	return apiKey && apiKey.length >= 8 ? text.split(apiKey).join('***') : text;
+}
+
 /** The error a node shows for a failed Localmind request: "Localmind: <detail>" plus the HTTP status. */
 export function localmindError(
 	node: INode,
@@ -114,8 +189,12 @@ export function localmindError(
 	body: unknown,
 	baseUrl: string,
 	itemIndex?: number,
+	apiKey?: string,
 ): NodeApiError {
-	const fullDetail = errorDetail(body) ?? response.statusMessage ?? `HTTP ${response.statusCode}`;
+	const fullDetail = masked(
+		errorDetail(body) ?? response.statusMessage ?? `HTTP ${response.statusCode}`,
+		apiKey,
+	);
 	const detail =
 		fullDetail.length > MAX_DETAIL_LENGTH
 			? `${fullDetail.slice(0, MAX_DETAIL_LENGTH)}…`
@@ -146,6 +225,17 @@ export function localmindError(
 	return error;
 }
 
+/** What a timeout means for the request, and what to do next. */
+function timeoutAdvice(request: LocalmindRequest, idempotent: boolean): string {
+	if (request.path === '/chat/completions') {
+		return 'The agent may still be working in Localmind. Localmind stops an answer of Agent → Ask or the Chat Model after 10 minutes; for longer tasks use Conversation → Send Message.';
+	}
+	if (!idempotent) {
+		return 'Localmind may have received the request and carried it out all the same: check (for example with File → List or Get Messages) before sending it again, or it may happen twice.';
+	}
+	return 'Localmind did not answer in time. Check that it is running and reachable, then try again.';
+}
+
 async function send(
 	this: LocalmindContext,
 	request: LocalmindRequest,
@@ -168,7 +258,7 @@ async function send(
 			},
 		);
 	}
-	const { url } = await this.getCredentials<LocalmindCredentials>(CREDENTIAL_TYPE);
+	const { url, apiKey } = await this.getCredentials<LocalmindCredentials>(CREDENTIAL_TYPE);
 	// The credential already withholds the key from such a URL; this says why nothing works.
 	if (!isEncryptedOrLocalUrl(url)) {
 		throw new NodeApiError(
@@ -202,7 +292,7 @@ async function send(
 		ignoreHttpStatusErrors: true,
 		// n8n would send the API key along to whatever host a redirect points to; see below.
 		disableFollowRedirect: true,
-		...(request.timeout && { timeout: request.timeout }),
+		timeout: request.timeout ?? DEFAULT_TIMEOUT_MS,
 		...extra,
 	};
 
@@ -216,29 +306,31 @@ async function send(
 				options,
 			)) as IN8nHttpFullResponse;
 		} catch (error) {
+			// Before the retry rule, which would repeat it four times. A read is tried once more:
+			// one slow answer to a poll must not end a wait that has time left.
+			if (isTimeoutError(error) && idempotent && attempt === 0) continue;
+			if (isTimeoutError(error)) {
+				// A new error: wrapping n8n's NodeApiError again would return it unchanged.
+				throw new NodeApiError(
+					this.getNode(),
+					{ message: masked((error as Error).message, apiKey) },
+					{
+						message: `Localmind: no answer within ${durationText(request.timeout ?? DEFAULT_TIMEOUT_MS)}`,
+						description: timeoutAdvice(request, idempotent),
+						itemIndex: request.itemIndex,
+					},
+				);
+			}
 			// A dropped connection during a poll must not fail a turn that is already queued.
 			if (idempotent && attempt < MAX_RETRIES && isTransientNetworkError(error)) {
 				await pause(this, retryDelay(attempt));
 				continue;
 			}
-			if (request.timeout && isTimeoutError(error)) {
-				// A new error: wrapping n8n's NodeApiError again would return it unchanged.
-				throw new NodeApiError(
-					this.getNode(),
-					{ message: (error as Error).message },
-					{
-						message: `Localmind: no answer within ${durationText(request.timeout)}`,
-						description:
-							'The agent may still be working in Localmind. Localmind stops an answer of Agent → Ask or the Chat Model after 10 minutes; for longer tasks use Conversation → Send Message.',
-						itemIndex: request.itemIndex,
-					},
-				);
-			}
 			// Not the error itself: its cause still holds the request with the Authorization header.
 			const { message, code } = error as { message?: string; code?: string };
 			throw new NodeApiError(
 				this.getNode(),
-				{ message: message ?? 'Network error', ...(code && { code }) },
+				{ message: masked(message ?? 'Network error', apiKey), ...(code && { code }) },
 				{ itemIndex: request.itemIndex },
 			);
 		}
@@ -289,7 +381,7 @@ async function send(
 			await pause(this, retryDelay(attempt, parseRetryAfter(response.headers['retry-after'])));
 			continue;
 		}
-		throw localmindError(this.getNode(), response, body, url, request.itemIndex);
+		throw localmindError(this.getNode(), response, body, url, request.itemIndex, apiKey);
 	}
 }
 
@@ -348,26 +440,44 @@ export async function localmindApiStream(
 	return response.body as unknown as AsyncIterableIterator<Buffer | Uint8Array>;
 }
 
-/** Downloads a file from the API, for example a file an agent generated. */
+/**
+ * Downloads a file from the API, for example a file an agent generated. It is received as a
+ * stream that stops one byte past `maxBytes`, so a larger file never fills n8n's memory (n8n 2.16 to
+ * 2.41 read a buffered response whole, whatever its size). A result longer than `maxBytes` means: too large.
+ */
 export async function localmindApiDownload(
 	this: LocalmindContext,
 	request: LocalmindRequest,
-	maxBytes?: number,
+	maxBytes: number,
 ): Promise<{ data: Buffer; contentType?: string }> {
-	const response = await send.call(this, request, {
-		encoding: 'arraybuffer',
-		json: false,
-		// Honored by newer n8n; the caller checks the size afterwards as well.
-		...(maxBytes !== undefined && { maxResponseBodyBytes: maxBytes }),
-	});
+	const response = await send.call(this, request, { encoding: 'stream', json: false });
 	const contentType = response.headers['content-type'];
-	return {
-		// The body is a Buffer already; a copy would double the memory for large files.
-		data: Buffer.isBuffer(response.body)
-			? response.body
-			: Buffer.from(response.body as ArrayBuffer),
-		contentType: typeof contentType === 'string' ? contentType : undefined,
-	};
+	let data: Buffer;
+	try {
+		data = await readUpTo(response.body, maxBytes + 1, DOWNLOAD_IDLE_MS);
+	} catch (error) {
+		if (isCancelled(this))
+			throw new NodeOperationError(this.getNode(), 'The execution was cancelled');
+		// Not the error's own text: a stream error can carry the request, Authorization included.
+		const code = (error as { code?: unknown }).code;
+		const stalled = error instanceof StalledStream;
+		// The code goes into the description: n8n replaces a message that names one.
+		throw new NodeApiError(
+			this.getNode(),
+			{ message: 'The download broke off' },
+			{
+				message: stalled
+					? `Localmind: the download sent no data for ${durationText(DOWNLOAD_IDLE_MS)}`
+					: 'Localmind: the download broke off',
+				description:
+					!stalled && typeof code === 'string' && /^[A-Z_]+$/.test(code)
+						? `The connection closed during the download (${code}). Try again.`
+						: 'Try again.',
+				itemIndex: request.itemIndex,
+			},
+		);
+	}
+	return { data, contentType: typeof contentType === 'string' ? contentType : undefined };
 }
 
 /**

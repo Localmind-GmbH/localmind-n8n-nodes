@@ -35,7 +35,12 @@ import { normalizeFolder } from '../nodes/shared/params';
 import { durationText, pause } from '../nodes/shared/polling';
 import { runError } from '../nodes/shared/runs';
 import { searchSpaces } from '../nodes/shared/spaces';
-import { localmindApiDownload, localmindApiRequestAllItems } from '../nodes/shared/transport';
+import {
+	localmindApiDownload,
+	localmindApiRequestAllItems,
+	readUpTo,
+	StalledStream,
+} from '../nodes/shared/transport';
 import { API } from './fakeConversation';
 import { fakeContext, node, routedContext } from './helpers';
 
@@ -198,8 +203,95 @@ describe('error bodies of downloads', () => {
 		]);
 
 		await expect(
-			localmindApiDownload.call(context, { method: 'GET', path: '/storage/download/x' }),
+			localmindApiDownload.call(context, { method: 'GET', path: '/storage/download/x' }, 1024),
 		).rejects.toMatchObject({ message: 'Localmind: File not found', httpCode: '404' });
+	});
+});
+
+describe('download size limit', () => {
+	it('stops receiving a file one byte past the limit', async () => {
+		let lastChunkRead = false;
+		async function* chunks() {
+			yield Buffer.from('aaaa');
+			yield Buffer.from('bbbb');
+			lastChunkRead = true;
+			yield Buffer.from('cccc');
+		}
+		const { context } = fakeContext([{ body: chunks() }]);
+
+		const { data } = await localmindApiDownload.call(
+			context,
+			{ method: 'GET', path: '/storage/download/x' },
+			5,
+		);
+
+		expect(data.toString()).toBe('aaaabb');
+		expect(lastChunkRead).toBe(false);
+	});
+
+	it('fails a download that stalls, and one that breaks off, as Localmind errors', async () => {
+		let closed = false;
+		const stalled = {
+			destroy: () => {
+				closed = true;
+			},
+			async *[Symbol.asyncIterator]() {
+				yield Buffer.from('start');
+				await new Promise(() => undefined);
+			},
+		};
+		await expect(readUpTo(stalled, 1024, 20)).rejects.toBeInstanceOf(StalledStream);
+		expect(closed).toBe(true);
+
+		async function* broken(): AsyncGenerator<Buffer> {
+			yield Buffer.from('start');
+			throw Object.assign(new Error('socket hang up, Authorization: Bearer test-key'), {
+				code: 'ECONNRESET',
+			});
+		}
+		const failing = fakeContext([{ body: broken() }]).context;
+		await expect(
+			localmindApiDownload.call(failing, { method: 'GET', path: '/storage/download/x' }, 1024),
+		).rejects.toMatchObject({
+			message: 'Localmind: the download broke off',
+			description: 'The connection closed during the download (ECONNRESET). Try again.',
+		});
+	});
+
+	it('takes a decimal Max File Size (MB)', async () => {
+		const { context } = routedContext(() => ({ body: Buffer.from('ok') }), {
+			url: '/v1/storage/download/org-1/spaces/s1/a.pdf',
+			binaryPropertyName: 'data',
+			options: { maxFileSizeMb: 1.1 },
+		});
+
+		const [item] = await executeFile.call(context, 'downloadByUrl', 0);
+
+		expect(item.json.size).toBe(2);
+	});
+
+	it('names a decimal limit as it is', async () => {
+		const { context } = routedContext(() => ({ body: Buffer.alloc(1_200_000) }), {
+			url: '/v1/storage/download/org-1/spaces/s1/a.pdf',
+			binaryPropertyName: 'data',
+			options: { maxFileSizeMb: 1.1 },
+		});
+
+		await expect(executeFile.call(context, 'downloadByUrl', 0)).rejects.toMatchObject({
+			message: "The file is larger than 1.1 MB ('Max File Size (MB)')",
+		});
+	});
+
+	it('refuses a File → Download larger than its Max File Size (MB)', async () => {
+		const { context } = routedContext(() => ({ body: Buffer.alloc(1024 * 1024 + 1) }), {
+			url: '/v1/storage/download/org-1/spaces/s1/big.pdf',
+			binaryPropertyName: 'data',
+			options: { maxFileSizeMb: 1 },
+		});
+
+		await expect(executeFile.call(context, 'downloadByUrl', 0)).rejects.toMatchObject({
+			message: "The file is larger than 1 MB ('Max File Size (MB)')",
+		});
 	});
 });
 
@@ -244,6 +336,33 @@ describe('Localmind Chat Model stream', () => {
 		});
 	});
 
+	it('stops a stream that sends more than 32 MB for one answer', async () => {
+		const piece = Buffer.from(
+			`data: ${JSON.stringify({ choices: [{ delta: { content: 'x'.repeat(1_000_000) } }] })}\n\n`,
+		);
+		async function* endless() {
+			for (;;) yield piece;
+		}
+		const model = new LocalmindChatModel('agent-1', node as INode, {
+			complete: async () => ({}),
+			stream: async () => endless(),
+		});
+
+		const read = async () => {
+			let chunks = 0;
+			for await (const chunk of model.stream([
+				{ role: 'user', content: [{ type: 'text', text: 'Hi' }] },
+			])) {
+				if (chunk) chunks++;
+			}
+			return chunks;
+		};
+
+		await expect(read()).rejects.toMatchObject({
+			message: 'The answer stream from Localmind is too large',
+		});
+	});
+
 	it('names the parser tool n8n uses', () => {
 		expect(OUTPUT_PARSER_TOOL).toBe('format_final_json_response');
 	});
@@ -256,7 +375,7 @@ describe('error texts', () => {
 		]);
 
 		const error = (await localmindApiDownload
-			.call(context, { method: 'GET', path: '/models/x' })
+			.call(context, { method: 'GET', path: '/models/x' }, 1024)
 			.catch((caught: unknown) => caught)) as { message: string; description?: string };
 
 		expect(error.message).toBe('Localmind: Agent not found (agent_not_found)');
@@ -475,15 +594,56 @@ describe('download limits for generated files', () => {
 	it('limits AI-label files to a count of their own, so a server cannot send endless ones', async () => {
 		const { context, requests } = routedContext(() => ({ body: Buffer.from('ok') }));
 		const item: INodeExecutionData = { json: {} };
-		const labels = ['a', 'b', 'c'].map((name) => file(`${name}.json.provenance.json`));
+		const files = ['a', 'b', 'c'].flatMap((name) => [
+			file(`${name}.json`),
+			file(`${name}.json.provenance.json`),
+		]);
 
-		await attachGeneratedFiles.call(context, item, [...labels, file('a.json')], settings, 0);
+		await attachGeneratedFiles.call(context, item, files, settings, 0);
 
-		expect(requests).toHaveLength(3);
-		expect(Object.keys(item.binary ?? {})).toEqual(['file_0', 'file_1', 'file_3']);
+		expect(requests).toHaveLength(4);
 		const listed = item.json.files as IDataObject[];
-		expect(listed[2].errorMessage).toBe(
+		expect(listed[4].errorMessage).toBe(
+			"Not downloaded: more than 2 files ('Max Files to Download')",
+		);
+		expect(listed[5].errorMessage).toBe(
 			"Not downloaded: more than 2 AI-label files ('Max Files to Download')",
+		);
+	});
+
+	it('takes a .provenance.json file for an AI label only next to its file', async () => {
+		const { context, requests } = routedContext(() => ({ body: Buffer.from('ok') }));
+		const item: INodeExecutionData = { json: {} };
+
+		await attachGeneratedFiles.call(
+			context,
+			item,
+			[file('x.provenance.json'), file('a.csv'), file('b.csv')],
+			settings,
+			0,
+		);
+
+		expect(requests).toHaveLength(2);
+		const listed = item.json.files as IDataObject[];
+		expect(listed[0]).not.toHaveProperty('provenance');
+		expect(listed[2].errorMessage).toContain("more than 2 files ('Max Files to Download')");
+	});
+
+	it('does not download an AI-label file larger than 1 MB', async () => {
+		const { context, requests } = routedContext(() => ({ body: Buffer.from('ok') }));
+		const item: INodeExecutionData = { json: {} };
+
+		await attachGeneratedFiles.call(
+			context,
+			item,
+			[file('a.csv'), file('a.csv.provenance.json', 2 * 1024 * 1024)],
+			{ ...settings, maxBytes: 50 * 1024 * 1024 },
+			0,
+		);
+
+		expect(requests).toHaveLength(1);
+		expect((item.json.files as IDataObject[])[1].errorMessage).toBe(
+			'Not downloaded: larger than 1 MB, the limit for AI-label files',
 		);
 	});
 

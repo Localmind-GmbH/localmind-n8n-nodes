@@ -1,10 +1,10 @@
-import type { IDataObject, IExecuteFunctions, JsonObject } from 'n8n-workflow';
+import type { IBinaryData, IDataObject, IExecuteFunctions, JsonObject } from 'n8n-workflow';
 import { NodeApiError, NodeOperationError } from 'n8n-workflow';
 
 import { isAcceptedImage, safeFileName } from '../../../shared/files';
 import type { Deadline } from '../../../shared/polling';
 import { getRun, runError } from '../../../shared/runs';
-import { localmindApiRequest } from '../../../shared/transport';
+import { localmindApiRequest, UPLOAD_TIMEOUT_MS } from '../../../shared/transport';
 import { multipartBody } from '../file/multipart';
 
 const TEXT_MIME_TYPES = new Set([
@@ -20,9 +20,12 @@ const TEXT_MIME_TYPES = new Set([
 
 const TEXT_EXTENSIONS = /\.(txt|md|markdown|csv|tsv|json|xml|ya?ml|log|html?|ini|toml|sql)$/i;
 
+/** A MIME type without its parameters: "Text/CSV; charset=utf-8" → "text/csv". */
+const baseType = (mimeType: string) => mimeType.toLowerCase().split(';')[0].trim();
+
 /** How a binary file can go into a conversation message: as an image, as inline text, or not at all. */
 export function attachmentKind(mimeType: string, fileName = ''): 'image' | 'text' | undefined {
-	const mime = mimeType.toLowerCase().split(';')[0].trim();
+	const mime = baseType(mimeType);
 	if (isAcceptedImage(mime)) return 'image';
 	// SVG is XML text; other image types are not accepted.
 	if (mime.startsWith('image/') && !mime.endsWith('+xml')) return undefined;
@@ -143,8 +146,6 @@ function uploadName(name: string, mimeType: string, fileExtension: string | unde
 	return extension ? safeFileName(`${safe.replace(/\.$/, '')}.${extension.toLowerCase()}`) : safe;
 }
 
-const baseType = (mimeType: string) => mimeType.toLowerCase().split(';')[0].trim();
-
 /** "report.pdf", "report (2).pdf", …: the sandbox keeps the files of a message under their names. */
 function uniqueName(name: string, taken: Set<string>): string {
 	const dot = name.lastIndexOf('.');
@@ -157,22 +158,48 @@ function uniqueName(name: string, taken: Set<string>): string {
 	return candidate;
 }
 
-/** A binary field of the item, read and named before anything is uploaded. */
+/** A binary field of the item, checked and named before anything is uploaded. */
 interface MessageFile {
 	field: string;
 	originalName: string;
 	/** The name it goes along under (uploads and inline text). */
 	fileName: string;
 	mimeType: string;
-	data: Buffer;
 	kind: 'image' | 'text' | undefined;
 }
 
 /**
- * Reads the item's binary fields and checks what can be checked without Localmind, before the
- * first upload: an API key cannot remove an upload that a later check would make useless.
+ * The first bytes of a binary field, without reading the whole file: from n8n's file store by
+ * stream, or from the start of the Base64 text it keeps in memory. Reading them also shows that
+ * the file is there to read.
  */
-async function readFiles(
+async function firstBytes(
+	this: IExecuteFunctions,
+	itemIndex: number,
+	field: string,
+	binary: IBinaryData,
+): Promise<Buffer> {
+	if (binary.id) {
+		const stream = await this.helpers.getBinaryStream(binary.id);
+		try {
+			for await (const chunk of stream as AsyncIterable<Buffer>) return chunk.subarray(0, 16);
+			return Buffer.alloc(0);
+		} finally {
+			stream.destroy();
+		}
+	}
+	if (typeof binary.data === 'string' && binary.data) {
+		return Buffer.from(binary.data.slice(0, 24), 'base64');
+	}
+	return (await this.helpers.getBinaryDataBuffer(itemIndex, field)).subarray(0, 16);
+}
+
+/**
+ * Checks the item's binary fields and names them, before the first upload: an API key cannot
+ * remove an upload that a later check would make useless, so each file must be there to read.
+ * The contents are read one file at a time later on, so that not every file is held in memory.
+ */
+async function checkFiles(
 	this: IExecuteFunctions,
 	itemIndex: number,
 	propertyNames: string[],
@@ -182,8 +209,8 @@ async function readFiles(
 	for (const field of propertyNames) {
 		const binary = this.helpers.assertBinaryData(itemIndex, field);
 		const originalName = binary.fileName ?? field;
-		const data = await this.helpers.getBinaryDataBuffer(itemIndex, field);
-		const sniffed = GENERIC_TYPES.has(baseType(binary.mimeType)) ? sniffImage(data) : undefined;
+		const head = await firstBytes.call(this, itemIndex, field, binary);
+		const sniffed = GENERIC_TYPES.has(baseType(binary.mimeType)) ? sniffImage(head) : undefined;
 		const mimeType = sniffed ?? binary.mimeType;
 		const kind = attachmentKind(mimeType, originalName);
 		files.push({
@@ -194,7 +221,6 @@ async function readFiles(
 					? originalName
 					: uniqueName(uploadName(originalName, mimeType, binary.fileExtension), taken),
 			mimeType,
-			data,
 			kind,
 		});
 	}
@@ -220,13 +246,15 @@ async function uploadAttachment(
 	deadline: Deadline,
 	itemIndex: number,
 ): Promise<UploadResult> {
+	// An upload started after the time is up would only be left behind unused.
+	if (deadline.expired) throw timedOut.call(this, file, deadline, itemIndex);
 	const { body, contentType } = multipartBody(
 		{},
 		{
 			field: 'file',
 			fileName: file.fileName,
 			mimeType: file.mimeType,
-			data: file.data,
+			data: await this.helpers.getBinaryDataBuffer(itemIndex, file.field),
 			exactName: true,
 		},
 	);
@@ -244,6 +272,7 @@ async function uploadAttachment(
 			},
 			body,
 			headers: { 'content-type': contentType },
+			timeout: UPLOAD_TIMEOUT_MS,
 			itemIndex,
 		})) as { run_id?: unknown };
 	} catch (error) {
@@ -289,15 +318,22 @@ async function uploadAttachment(
 				},
 			);
 		}
-		if (deadline.expired) {
-			throw new NodeOperationError(
-				this.getNode(),
-				`Localmind did not process the attachment "${file.fileName}" within ${deadline.duration}`,
-				{ itemIndex, description: 'The message was not sent. Raise the timeout, or try again.' },
-			);
-		}
+		if (deadline.expired) throw timedOut.call(this, file, deadline, itemIndex);
 		await deadline.wait(ATTACHMENT_POLL_MS, this);
 	}
+}
+
+function timedOut(
+	this: IExecuteFunctions,
+	file: MessageFile,
+	deadline: Deadline,
+	itemIndex: number,
+): NodeOperationError {
+	return new NodeOperationError(
+		this.getNode(),
+		`Localmind did not process the attachment "${file.fileName}" within ${deadline.duration}`,
+		{ itemIndex, description: 'The message was not sent. Raise the timeout, or try again.' },
+	);
 }
 
 const CONVERT_IMAGE =
@@ -343,12 +379,18 @@ function refusal(
 	);
 }
 
-const inlineText = (file: MessageFile): IDataObject => ({
-	type: 'file',
-	content: decodeText(file.data),
-	filename: file.fileName,
-	media_type: file.mimeType,
-});
+async function inlineText(
+	this: IExecuteFunctions,
+	file: MessageFile,
+	itemIndex: number,
+): Promise<IDataObject> {
+	return {
+		type: 'file',
+		content: decodeText(await this.helpers.getBinaryDataBuffer(itemIndex, file.field)),
+		filename: file.fileName,
+		media_type: file.mimeType,
+	};
+}
 
 /**
  * The attachments of a message from the item's binary properties.
@@ -367,22 +409,23 @@ export async function buildAttachments(
 	target: () => Promise<AttachmentTarget>,
 	deadline: Deadline,
 ): Promise<IDataObject[]> {
-	const files = await readFiles.call(this, itemIndex, propertyNames);
+	const files = await checkFiles.call(this, itemIndex, propertyNames);
 	if (uploadsOffered.get(this) === false) refuseUnsupported.call(this, files, itemIndex);
 
 	const attachments: IDataObject[] = [];
 	for (const file of files) {
 		if (file.kind === 'image') {
+			const data = await this.helpers.getBinaryDataBuffer(itemIndex, file.field);
 			attachments.push({
 				type: 'image',
-				url: `data:${file.mimeType};base64,${file.data.toString('base64')}`,
+				url: `data:${file.mimeType};base64,${data.toString('base64')}`,
 				filename: file.fileName,
 				media_type: file.mimeType,
 			});
 			continue;
 		}
 		if (uploadsOffered.get(this) === false) {
-			attachments.push(inlineText(file));
+			attachments.push(await inlineText.call(this, file, itemIndex));
 			continue;
 		}
 		const result = await uploadAttachment.call(this, file, await target(), deadline, itemIndex);
@@ -402,13 +445,13 @@ export async function buildAttachments(
 			// Remembered for the execution: every item would otherwise send its files in vain.
 			uploadsOffered.set(this, false);
 			refuseUnsupported.call(this, files, itemIndex);
-			attachments.push(inlineText(file));
+			attachments.push(await inlineText.call(this, file, itemIndex));
 			continue;
 		}
 		if (file.kind !== 'text') {
 			throw refusal.call(this, file, result.code, result.explanation, itemIndex);
 		}
-		attachments.push(inlineText(file));
+		attachments.push(await inlineText.call(this, file, itemIndex));
 	}
 	return attachments;
 }

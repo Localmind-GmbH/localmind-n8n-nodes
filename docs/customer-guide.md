@@ -77,9 +77,17 @@ npm install --legacy-peer-deps @localmind/n8n-nodes-localmind@1.0.0
 
 ### Offline installation (air-gapped)
 
-1. On a machine with internet access, download the package: `npm pack @localmind/n8n-nodes-localmind@1.0.0`. This creates `localmind-n8n-nodes-localmind-1.0.0.tgz`.
-2. Copy the file to the n8n host (for Docker: `docker cp localmind-n8n-nodes-localmind-1.0.0.tgz n8n:/tmp/`).
-3. On the n8n host or in the container:
+1. On a machine with internet access, download the package: `npm pack @localmind/n8n-nodes-localmind@1.0.0`. This creates `localmind-n8n-nodes-localmind-1.0.0.tgz`. The same file is attached to the version's [GitHub release](https://github.com/Localmind-GmbH/localmind-n8n-nodes/releases).
+2. Check that it is the file Localmind published, with the [GitHub CLI](https://cli.github.com/):
+
+   ```bash
+   gh attestation verify localmind-n8n-nodes-localmind-1.0.0.tgz --repo Localmind-GmbH/localmind-n8n-nodes --signer-workflow Localmind-GmbH/localmind-n8n-nodes/.github/workflows/publish.yml --source-ref refs/heads/main
+   ```
+
+   It confirms that this repository's release workflow built the file from `main`. Without the GitHub CLI, compare the file's SHA-256 (`sha256sum`) with `SHA256SUMS` in the GitHub release.
+
+3. Copy the file to the n8n host (for Docker: `docker cp localmind-n8n-nodes-localmind-1.0.0.tgz n8n:/tmp/`).
+4. On the n8n host or in the container:
 
    ```bash
    mkdir -p ~/.n8n/nodes && cd ~/.n8n/nodes
@@ -88,7 +96,7 @@ npm install --legacy-peer-deps @localmind/n8n-nodes-localmind@1.0.0
 
    `--legacy-peer-deps` stops npm from downloading the n8n libraries the package expects from n8n itself. The package has no other dependencies.
 
-4. Restart n8n.
+5. Restart n8n.
 
 If you run a private npm registry, n8n can also install from it (`N8N_COMMUNITY_PACKAGES_REGISTRY`; this requires an n8n license).
 
@@ -96,10 +104,11 @@ If you run a private npm registry, n8n can also install from it (`N8N_COMMUNITY_
 
 In n8n, create a credential of type **Localmind API**:
 
-| Field   | Value                                                                                                                                                                                                                                                                                                                                                                                                           |
-| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| API URL | Your Localmind **API host**: usually the address ending in `-api`, for example `https://acme-api.example.com`. The app address (usually ending in `-app`, the one you open in the browser) does not serve the API. It must start with `https://`: plain `http://` works only for this machine (`localhost`, `*.localhost`, `127.0.0.1`), since it would carry the key unencrypted. A trailing `/v1` is ignored. |
-| API Key | The key from step 1.                                                                                                                                                                                                                                                                                                                                                                                            |
+| Field                        | Value                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| API URL                      | Your Localmind **API host**: usually the address ending in `-api`, for example `https://acme-api.example.com`. The app address (usually ending in `-app`, the one you open in the browser) does not serve the API. It must start with `https://`: plain `http://` works only for this machine (`localhost`, `*.localhost`, `127.0.0.1`), since it would carry the key unencrypted. A trailing `/v1` is ignored. |
+| Allowed HTTP Request Domains | Leave it at **None** unless you call Localmind with n8n's HTTP Request node. Then choose Specific Domains and enter your API host (for example `acme-api.example.com`), so that the key goes nowhere else. The Localmind nodes are not affected.                                                                                                                                                                |
+| API Key                      | The key from step 1.                                                                                                                                                                                                                                                                                                                                                                                            |
 
 In Docker, "this machine" is n8n's own container: an address such as `http://host.docker.internal:8000` or a Compose service name like `http://backend:8000` is refused. Use Localmind's `https://` address, or put a reverse proxy with TLS in front of it.
 
@@ -186,7 +195,8 @@ The Localmind node can be a tool of n8n's AI Agent. The AI Agent's model then fi
 - Uploads are limited to 20 per minute per user; the node waits and retries automatically. Up to Localmind 1.5.0 the limit can count all users together, so other people's uploads use it up too.
 - Images the agent creates with its image tool are not returned as binary fields. With Agent → Ask they come as Markdown links at the start of the answer, which File → Download by URL can fetch; in conversations they show in the Localmind app. Files from code execution (Excel, Word, PDF, charts saved as files) are returned.
 - Files an agent generates are not saved to a space by themselves. To keep one in the data pool, pass the binary field (`file_0`, … by default) to File → Upload.
-- Ask and Send Message download at most 10 generated files of up to 50 MB each by default ('Max Files to Download', 'Max File Size (MB)'). Larger or further files stay listed with their link and can be fetched with File → Download by URL.
+- Ask and Send Message download at most 10 generated files of up to 50 MB each by default ('Max Files to Download', 'Max File Size (MB)'). Larger or further files stay listed with their link and can be fetched with File → Download by URL, which has its own 'Max File Size (MB)' option (50 MB by default).
+- With the default credential setting, n8n's HTTP Request node cannot use the Localmind credential ("This credential is configured to prevent use within an HTTP Request node"). Change 'Allowed HTTP Request Domains' in the credential to Specific Domains with your API host.
 - From Localmind 1.7.0, generated files carry an AI label (EU AI Act). CSV and JSON files come with a second file, `<name>.provenance.json`; the nodes pass it on marked `provenance: true`, and it does not count towards 'Max Files to Download' (AI-label files have their own count of the same size).
 - Up to Localmind 1.6.0, a generated file whose name holds characters outside Latin-1 (an en dash, an emoji, Chinese) cannot be downloaded: Localmind answers with an error. 1.7.0 fixes this; until then, ask the agent for plain file names.
 - With a key limited to spaces, Job → Get cannot read the runs of uploads and reprocessing and reports "PipelineRun … not found". File → Upload is not affected: it waits on the document itself. Only a cancelled upload goes unnoticed with such a key: Upload then waits until its timeout.
@@ -224,4 +234,7 @@ The credential test shows its own messages from n8n 2.34.0 on; older n8n shows i
 | Localmind refused the attachment "…" (`upload_type_…`)                                                               | The space's chat settings do not allow this file type, the type goes only to the code sandbox and the agent has no skill, or code execution is switched off. A file whose name has no extension cannot be judged: give it a name with its extension in the step before. The error's description says which. |
 | Localmind refused the images of the message (`upload_type_…`)                                                        | The space's chat settings do not let images go to the model: image types are switched off or only stored. Switch them on, or send the message without images.                                                                                                                                               |
 | Localmind could not process the attachment "…"                                                                       | Localmind could not read the file, for example a damaged PDF, or a spreadsheet too large to read without an agent that has a skill. The reason follows the message.                                                                                                                                         |
+| Localmind: no answer within 60 minute(s) (File → Upload, attachments), or within 5 minute(s)                         | Localmind did not answer in time. For an upload or a sent message it may have carried it out anyway: check with File → List or Get Messages before you try again, or the file or message may exist twice.                                                                                                   |
+| Localmind: the download broke off, or sent no data for 5 minute(s)                                                   | The connection dropped or Localmind stopped sending during a download. Try again.                                                                                                                                                                                                                           |
+| The file name "…" has a "/" or "\\" (File → Upload)                                                                  | 'File Name' takes the name only; choose the folder in 'Folder'.                                                                                                                                                                                                                                             |
 | Test Connection of an MCP tool in Localmind: "403 Forbidden"                                                         | The n8n MCP Server Trigger rejected the token. The header must be `Authorization` with the value `Bearer <token>`, the token must match the trigger's credential in n8n, and the header must be added to the list (not only typed in).                                                                      |

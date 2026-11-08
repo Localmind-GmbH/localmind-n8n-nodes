@@ -8,14 +8,17 @@ Setting it up for the first time? The [customer guide](https://github.com/Localm
 
 ## Credentials
 
-The **Localmind API** credential has two fields:
+The **Localmind API** credential has these fields:
 
-| Field   | Value                                                                                                                                                                                                                                                                                                                                                                                |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| API URL | The API host of your Localmind instance, usually the one ending in `-api` (for example `https://acme-api.example.com`). The app host (usually ending in `-app`) does not serve the API. It must start with `https://`: plain `http://` works only for this machine (`localhost`, `*.localhost`, `127.0.0.1`), since it would carry the key unencrypted. A trailing `/v1` is ignored. |
-| API Key | A Localmind user API key (`sk-…`). The nodes act with the key owner's permissions and space scopes.                                                                                                                                                                                                                                                                                  |
+| Field                        | Value                                                                                                                                                                                                                                                                                                                                                                                |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| API URL                      | The API host of your Localmind instance, usually the one ending in `-api` (for example `https://acme-api.example.com`). The app host (usually ending in `-app`) does not serve the API. It must start with `https://`: plain `http://` works only for this machine (`localhost`, `*.localhost`, `127.0.0.1`), since it would carry the key unencrypted. A trailing `/v1` is ignored. |
+| API Key                      | A Localmind user API key (`sk-…`). The nodes act with the key owner's permissions and space scopes.                                                                                                                                                                                                                                                                                  |
+| Allowed HTTP Request Domains | n8n's setting for using the credential in its HTTP Request node, **None** by default, so that the key cannot be sent to another host by mistake. The Localmind nodes are not affected. To call an endpoint the nodes do not cover, choose Specific Domains and enter your API host.                                                                                                  |
 
-Saving the credential lists the agents the key can use. A wrong key or an `-app` host fails with a message that says what to fix.
+Saving the credential lists the agents the key can use. A wrong key or an `-app` host fails with a message that says what to fix. If Localmind's error text ever repeats the key, the nodes mask it.
+
+File → Download and Download by URL stop at 'Max File Size (MB)' (50 MB by default) and fail for a larger file; downloads are received as a stream that ends at the limit, so a large file never fills n8n's memory. Download by URL takes a link whose path starts with `/v1/storage/download/` (with or without a host), not a link that merely contains it. Requests that do not set their own wait for Localmind's answer for up to 5 minutes; uploads (File → Upload, attachments, and messages that carry more than 1 MB of images or text) for up to 60 minutes, which also covers sending the file. A read that runs out of time is tried once more; an upload or a sent message is not repeated, since Localmind may have carried it out anyway. A download that sends no data for 5 minutes fails, and a streamed answer of the Chat Model larger than 32 MB is stopped.
 
 ## Nodes
 
@@ -32,7 +35,7 @@ Saving the credential lists the agents the key can use. A wrong key or an `-app`
 
 Agents, spaces, conversations and documents are picked from a searchable list or entered by ID; folders from a dropdown of the space's file manager. Get Many operations support "Return All" with paging.
 
-Requests retry `429 Too Many Requests` and, for requests that are safe to repeat, `5xx` answers and dropped connections, waiting as long as the `Retry-After` header says or backing off exponentially. Requests that would act twice when repeated, such as sending a message, are not retried after a `5xx` or a dropped connection. Agent → Ask and the Chat Model without streaming retry a `429` only when it came before the agent acted: from Localmind 1.7.0 that is always the case, and a proxy's `429` never reached Localmind. Up to 1.6.0 an agent built as a graph can hit Localmind's rate limit after its first tools ran, and a retry would repeat them, so that `429` is not retried. Errors read `Localmind: <detail>` and carry the HTTP status. n8n's own **Retry On Fail** runs the whole node again, so a Send Message or Upload that already succeeded is sent again: leave it off for those, and turn it on for Ask or the Chat Model only where repeating the agent's actions is acceptable.
+Requests retry `429 Too Many Requests` and, for requests that are safe to repeat, `5xx` answers and dropped connections, waiting as long as the `Retry-After` header says or backing off exponentially. Requests that would act twice when repeated, such as sending a message, are not retried after a `5xx` or a dropped connection. Agent → Ask and the Chat Model without streaming retry a `429` only when Localmind's answer shows it came before the agent acted, as from Localmind 1.7.0 (OpenAI's `rate_limit_error`). Up to 1.6.0 an agent built as a graph can hit Localmind's rate limit after its first tools ran, and a retry would repeat them, so that `429` is not retried; nor is a `429` page from a proxy, which may have replaced Localmind's answer. Errors read `Localmind: <detail>` and carry the HTTP status. n8n's own **Retry On Fail** runs the whole node again, so a Send Message or Upload that already succeeded is sent again: leave it off for those, and turn it on for Ask or the Chat Model only where repeating the agent's actions is acceptable.
 
 ### Which operation for which case
 
@@ -114,7 +117,7 @@ A chat model sub-node for n8n's AI Agent and chains. The selected Localmind agen
 Needs Node.js 22.12 or later, which the test framework requires. The published package itself runs on the Node.js of your n8n.
 
 ```bash
-npm ci
+npm ci --ignore-scripts   # a dev tool's install script would fetch an unpinned package
 npm run dev      # n8n with the nodes and hot reload on http://localhost:5678
 npm test         # unit tests (Vitest)
 npm run typecheck  # TypeScript check of the code and the tests

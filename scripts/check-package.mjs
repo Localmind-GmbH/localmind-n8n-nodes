@@ -1,8 +1,13 @@
 // Checks what npm would publish: only the expected files, and nothing secret or internal in them.
-// Runs before every publish (prepublishOnly) and in CI after the build. Findings name the file and
-// line but never the matched text, so a leaked secret does not end up in the CI log.
+// Runs in CI and in the release's build job after the build. Findings name the file and line but
+// never the matched text, so a leaked secret does not end up in the CI log.
+//
+// With `--unpacked <dir>` it checks an unpacked package file instead, as the release's publish
+// job does with the file the build job packed: there, nothing but this repository's code runs.
+// The package.json in it must then be the repository's, byte for byte.
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
+import { join, relative } from 'node:path';
 
 /** The only email address the package may contain: the author in package.json. */
 const ALLOWED_EMAILS = new Set(['support@localmind.ai']);
@@ -65,7 +70,20 @@ const FORBIDDEN = [
 	],
 	['a private key', /-----BEGIN [A-Z ]*PRIVATE KEY-----/],
 	['a local path', /\/home\/[a-z_][\w-]*\/|\/Users\/[^/\s]+\/|\/opt\/stacks\/|[A-Za-z]:\\Users\\/],
+	// Host names of internal networks, also without a scheme ("db.corp", "ci.internal:8080").
+	[
+		'an internal host name',
+		/\b[a-z\d](?:[a-z\d-]*[a-z\d])?(?:\.[a-z\d-]+)*\.(?:local|internal|intranet|corp|lan|localdomain|home\.arpa)\b(?![.-]?\w)/i,
+	],
 ];
+
+/**
+ * IPv6 addresses other than this machine's (::1): with "::" in them, or all eight groups. Times
+ * such as 12:30:45 have neither.
+ */
+const IPV6_ADDRESS = /(?<![\w:.])(?:[\da-f]{0,4}:){2,7}[\da-f]{0,4}(?![\w:.])/gi;
+const isIpv6 = (text) =>
+	(text.includes('::') || text.split(':').length === 8) && /[\da-f]/i.test(text) && text !== '::1';
 
 /** IP addresses other than this machine's (127.x.x.x), which tells nothing about a network. */
 const IP_ADDRESS = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
@@ -77,11 +95,35 @@ const EMAIL = /[\w.%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
 
 const lineOf = (text, index) => text.slice(0, index).split('\n').length;
 
-const [pack] = JSON.parse(
-	execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], { encoding: 'utf8' }),
-);
-const files = pack.files.map((file) => file.path);
 const problems = [];
+const unpackedFlag = process.argv.indexOf('--unpacked');
+const root = unpackedFlag === -1 ? '.' : process.argv[unpackedFlag + 1];
+if (!root) {
+	console.error(
+		'Usage: node scripts/check-package.mjs [--unpacked <folder of the unpacked package>]',
+	);
+	process.exit(2);
+}
+
+/** The regular files below a directory; anything else (a link, a device) is a finding itself. */
+function filesIn(dir) {
+	return readdirSync(dir).flatMap((name) => {
+		const path = join(dir, name);
+		const stats = lstatSync(path);
+		if (stats.isDirectory()) return filesIn(path);
+		if (!stats.isFile()) problems.push(`${relative(root, path)}: not a regular file`);
+		return stats.isFile() ? [relative(root, path)] : [];
+	});
+}
+
+const files =
+	unpackedFlag === -1
+		? JSON.parse(
+				execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
+					encoding: 'utf8',
+				}),
+			)[0].files.map((file) => file.path)
+		: filesIn(root);
 
 for (const path of files) {
 	if (!ALLOWED_FILES.some((pattern) => pattern.test(path))) {
@@ -90,6 +132,32 @@ for (const path of files) {
 }
 
 const manifest = JSON.parse(readFileSync('package.json', 'utf8'));
+if (
+	unpackedFlag !== -1 &&
+	!(
+		existsSync(join(root, 'package.json')) &&
+		readFileSync(join(root, 'package.json')).equals(readFileSync('package.json'))
+	)
+) {
+	problems.push("package.json: missing, or differs from the repository's");
+}
+// Customers' npm would run install scripts and install dependencies; the package has neither.
+for (const field of [
+	'dependencies',
+	'optionalDependencies',
+	'bundleDependencies',
+	'bundledDependencies',
+]) {
+	if (manifest[field] && Object.keys(manifest[field]).length)
+		problems.push(`package.json: has ${field}`);
+}
+for (const script of ['preinstall', 'install', 'postinstall', 'prepare', 'prepublish']) {
+	if (manifest.scripts?.[script]) problems.push(`package.json: has a "${script}" script`);
+}
+// Executables on the customer's path, native builds, and man pages: none belongs in this package.
+for (const field of ['bin', 'man', 'directories', 'gypfile']) {
+	if (manifest[field] !== undefined) problems.push(`package.json: has ${field}`);
+}
 for (const entry of [...manifest.n8n.credentials, ...manifest.n8n.nodes]) {
 	if (!files.includes(entry)) problems.push(`${entry}: missing, run the build first`);
 }
@@ -109,7 +177,7 @@ const isOwnRepository = ({ host, path }) => {
 };
 
 for (const path of files) {
-	const text = readFileSync(path, 'utf8');
+	const text = readFileSync(join(root, path), 'utf8');
 	const checks = path.endsWith('.svg') ? [...FORBIDDEN, ...SVG_FORBIDDEN] : FORBIDDEN;
 	for (const [what, pattern] of checks) {
 		const match = pattern.exec(text);
@@ -128,6 +196,11 @@ for (const path of files) {
 	for (const match of text.matchAll(IP_ADDRESS)) {
 		if (!match[0].startsWith('127.')) {
 			problems.push(`${path}:${lineOf(text, match.index)}: contains an IP address`);
+		}
+	}
+	for (const match of text.matchAll(IPV6_ADDRESS)) {
+		if (isIpv6(match[0])) {
+			problems.push(`${path}:${lineOf(text, match.index)}: contains an IPv6 address`);
 		}
 	}
 	for (const match of text.matchAll(EMAIL)) {

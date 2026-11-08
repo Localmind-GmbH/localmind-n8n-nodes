@@ -18,6 +18,7 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -38,3 +39,10 @@ jobs:
       - run: npm run build
       # Only the expected files, and nothing secret or internal in them.
       - run: npm run check:package
+      # The release's publish job checks the packed file this way, with nothing installed.
+      - name: Check the packed file as the release does
+        run: |
+          file=$(npm pack --ignore-scripts --json --pack-destination "$RUNNER_TEMP" | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8"))[0].filename')
+          mkdir -- "$RUNNER_TEMP/unpacked"
+          tar -xzf "$RUNNER_TEMP/$file" -C "$RUNNER_TEMP/unpacked" --strip-components=1 --no-same-owner --no-same-permissions
+          node scripts/check-package.mjs --unpacked "$RUNNER_TEMP/unpacked"

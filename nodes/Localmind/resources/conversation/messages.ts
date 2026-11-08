@@ -2,8 +2,8 @@ import type { IDataObject } from 'n8n-workflow';
 
 import { SANDBOX_BUSY_MESSAGE, stepLimitMessage } from '../../../shared/errors';
 import {
-	fileDetails,
 	generatedFilePath,
+	listFiles,
 	specificMimeType,
 	type GeneratedFile,
 } from '../../../shared/files';
@@ -232,7 +232,7 @@ export function simplifyMessage(
 	};
 	if (message.role === 'assistant') {
 		simplified.status = messageStatus(message, superseded, resuming);
-		simplified.files = generatedFiles(message).map(fileDetails);
+		simplified.files = listFiles(generatedFiles(message));
 		simplified.tokens = tokenUsage(message);
 		const failure = !resuming && turnFailure(message, { whileWaiting: true });
 		// Not "error": n8n 2.16 counts any item with an "error" key as failed (Retry On Fail).

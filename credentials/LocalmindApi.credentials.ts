@@ -47,6 +47,42 @@ export class LocalmindApi implements ICredentialType {
 			description:
 				'A Localmind user API key (starts with "sk-"). The nodes act with the permissions and space scopes of the key owner.',
 		},
+		// n8n's own setting for the HTTP Request node, which n8n adds unless a credential defines it:
+		// defined here to default to None, so that the key cannot be sent to another host by mistake.
+		{
+			displayName: 'Allowed HTTP Request Domains',
+			name: 'allowedHttpRequestDomains',
+			type: 'options',
+			options: [
+				{
+					name: 'All',
+					value: 'all',
+					description: 'Allow all requests when used in the HTTP Request node',
+				},
+				{
+					name: 'Specific Domains',
+					value: 'domains',
+					description: 'Restrict requests to specific domains',
+				},
+				{
+					name: 'None',
+					value: 'none',
+					description: 'Block all requests when used in the HTTP Request node',
+				},
+			],
+			default: 'none',
+			description:
+				'Whether the HTTP Request node may use this credential, and for which hosts. The Localmind nodes are not affected. To call an API endpoint the nodes do not cover, choose Specific Domains and enter your Localmind API host.',
+		},
+		{
+			displayName: 'Allowed Domains',
+			name: 'allowedDomains',
+			type: 'string',
+			default: '',
+			placeholder: 'e.g. acme-api.example.com',
+			description: 'Comma-separated list of allowed domains (supports wildcards with *)',
+			displayOptions: { show: { allowedHttpRequestDomains: ['domains'] } },
+		},
 	];
 
 	authenticate: IAuthenticateGeneric = {

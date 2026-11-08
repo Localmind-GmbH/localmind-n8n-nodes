@@ -8,7 +8,11 @@ import {
 } from '../../../shared/files';
 import { commaList, idParam, textParam, UUID } from '../../../shared/params';
 import { Deadline, timeoutMs } from '../../../shared/polling';
-import { localmindApiRequest, localmindApiRequestAllItems } from '../../../shared/transport';
+import {
+	localmindApiRequest,
+	localmindApiRequestAllItems,
+	UPLOAD_TIMEOUT_MS,
+} from '../../../shared/transport';
 import { getLimit } from '../common';
 import { buildAttachments, type AttachmentTarget } from './attachments';
 import {
@@ -74,6 +78,18 @@ function parseToolIds(this: IExecuteFunctions, value: unknown, itemIndex: number
 	return ids;
 }
 
+/** About how much a message's attachments carry in the message itself (data URIs, text). */
+function inlineBytes(attachments: unknown): number {
+	if (!Array.isArray(attachments)) return 0;
+	return (attachments as IDataObject[]).reduce(
+		(sum, { url, content }) =>
+			sum +
+			(typeof url === 'string' ? url.length : 0) +
+			(typeof content === 'string' ? content.length : 0),
+		0,
+	);
+}
+
 /**
  * Queues the message. From Localmind 1.7.0 the space's chat settings also decide whether images
  * reach the model; a refusal names only its code, so it is explained here.
@@ -88,6 +104,8 @@ async function queueMessage(
 			method: 'POST',
 			path: `${conversationPath.call(this, itemIndex)}/messages-async`,
 			body,
+			// Images and text files go along in the message itself; uploaded files only as references.
+			...(inlineBytes(body.attachments) > 1024 * 1024 && { timeout: UPLOAD_TIMEOUT_MS }),
 			itemIndex,
 		})) as QueuedTurn;
 	} catch (error) {
@@ -130,6 +148,10 @@ async function sendMessage(
 	const timeout = timeoutMs(this.getNode(), options.timeoutMinutes, itemIndex);
 
 	const body: IDataObject = { message };
+	// Checked before any upload, which a typo here would otherwise leave behind.
+	if (options.disabledToolIds !== undefined) {
+		body.disabled_tool_ids = parseToolIds.call(this, options.disabledToolIds, itemIndex);
+	}
 	const names = commaList(options.attachments);
 	if (names.length) {
 		// Read only when a file is uploaded: the conversation's space and agent take it.
@@ -153,9 +175,6 @@ async function sendMessage(
 		// Its own wait: a message sent when the files took nearly all of one would time out at once.
 		const processing = new Deadline(timeout);
 		body.attachments = await buildAttachments.call(this, itemIndex, names, loadTarget, processing);
-	}
-	if (options.disabledToolIds !== undefined) {
-		body.disabled_tool_ids = parseToolIds.call(this, options.disabledToolIds, itemIndex);
 	}
 
 	const turn = await queueMessage.call(this, body, itemIndex);

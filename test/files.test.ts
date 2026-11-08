@@ -5,6 +5,7 @@ import {
 	downloadLinkPath,
 	downloadPath,
 	generatedFilePath,
+	isDownloadLink,
 	safeFileName,
 	specificMimeType,
 } from '../nodes/shared/files';
@@ -27,6 +28,28 @@ describe('downloadPath', () => {
 });
 
 describe('downloadLinkPath', () => {
+	it('takes the download endpoint only as the start of the link path, not inside another link', () => {
+		expect(
+			downloadLinkPath('https://acme-app.example.com/v1/storage/download/org-1/a.pdf', 'auto'),
+		).toBe('/storage/download/org-1/a.pdf');
+		expect(downloadLinkPath(' /storage/download/org-1/a.pdf', 'auto')).toBe(
+			'/storage/download/org-1/a.pdf',
+		);
+		expect(
+			downloadLinkPath('https://acme.example.com/lm-api/v1/storage/download/org-1/a.pdf', 'auto'),
+		).toBe('/storage/download/org-1/a.pdf');
+		for (const foreign of [
+			'https://evil.example/?next=/v1/storage/download/org-1/a.pdf',
+			'https://evil.example/page#/v1/storage/download/org-1/a.pdf',
+			'//evil.example/v1/storage/download/org-1/a.pdf',
+			'/V1/Storage/Download/org-1/a.pdf',
+			'see /v1/storage/download/org-1/a.pdf',
+		]) {
+			expect(downloadLinkPath(foreign, 'auto')).toBeUndefined();
+			expect(isDownloadLink(foreign)).toBe(false);
+		}
+	});
+
 	it.each([
 		'/v1/storage/download/../../conversations',
 		'/v1/storage/download/org-1/%2E%2E/%2e%2e/conversations',
@@ -146,6 +169,11 @@ describe('safeFileName', () => {
 		expect(safeFileName('report\r\nX-Injected: 1.pdf')).toBe('reportX-Injected: 1.pdf');
 		expect(safeFileName('report\u202Efdp.exe')).toBe('reportfdp.exe');
 		expect(safeFileName('a\u2066b\u2069.txt')).toBe('ab.txt');
+		expect(safeFileName('in\u200Bvoice\u00AD.pdf\uFEFF')).toBe('invoice.pdf');
+		expect(safeFileName('Über\u0085sicht.xlsx')).toBe('Übersicht.xlsx');
+		// Joiners that scripts and emoji need stay: Persian "می‌خواهم", a family emoji.
+		expect(safeFileName('می\u200Cخواهم.txt')).toBe('می\u200Cخواهم.txt');
+		expect(safeFileName('👨\u200D👩\u200D👧.png')).toBe('👨\u200D👩\u200D👧.png');
 	});
 
 	it('shortens a very long name but keeps its extension', () => {

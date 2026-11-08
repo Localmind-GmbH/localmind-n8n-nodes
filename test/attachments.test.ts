@@ -345,6 +345,65 @@ describe('buildAttachments', () => {
 		expect(sleep).not.toHaveBeenCalledWith(expect.any(Number) as never);
 	});
 
+	it('starts no upload once the time is up, since it would be left behind unused', async () => {
+		const { context, requests } = routedContext(localmind17(), {}, binary);
+
+		await expect(
+			buildAttachments.call(context, 0, ['contract'], newTarget(), new Deadline(0)),
+		).rejects.toThrow('did not process the attachment "contract.pdf" within');
+		expect(requests.filter((request) => request.url.endsWith('/parse-async'))).toEqual([]);
+	});
+
+	it("reads only the first bytes from n8n's file store to tell the type, and closes the stream", async () => {
+		const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+		const { context } = routedContext(
+			localmind17(),
+			{},
+			{
+				data: { mimeType: 'application/octet-stream', data: png },
+			},
+		);
+		const destroy = vi.fn();
+		const stream = {
+			destroy,
+			async *[Symbol.asyncIterator]() {
+				yield png.subarray(0, 8);
+				yield png.subarray(8);
+			},
+		};
+		Object.assign(context.helpers, {
+			assertBinaryData: () => ({ mimeType: 'application/octet-stream', id: 'filesystem-v2:abc' }),
+			getBinaryStream: vi.fn(async () => stream),
+		});
+
+		const [attachment] = await buildAttachments.call(
+			context,
+			0,
+			['data'],
+			newTarget(),
+			new Deadline(60_000),
+		);
+
+		expect(attachment).toMatchObject({ type: 'image', media_type: 'image/png' });
+		expect(destroy).toHaveBeenCalled();
+	});
+
+	it('uploads nothing when a later file cannot be read', async () => {
+		const { context, requests } = routedContext(
+			localmind17(),
+			{},
+			{
+				...binary,
+				gone: { mimeType: 'application/pdf', fileName: 'gone.pdf', data: undefined as never },
+			},
+		);
+
+		await expect(
+			buildAttachments.call(context, 0, ['contract', 'gone'], newTarget(), new Deadline(60_000)),
+		).rejects.toThrow();
+		expect(requests).toEqual([]);
+	});
+
 	describe('on Localmind up to 1.6.0, whose upload route takes no API key', () => {
 		const before17 = (options: Request) => {
 			if (options.method === 'GET' && options.url === `${API}/conversations/c1`) {

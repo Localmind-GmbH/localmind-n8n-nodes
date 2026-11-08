@@ -5,6 +5,7 @@ import {
 	localmindApiRequest,
 	localmindApiRequestAllItems,
 	localmindApiStream,
+	UPLOAD_TIMEOUT_MS,
 } from '../nodes/shared/transport';
 import { rateLimitedBeforeAction } from '../nodes/shared/retry';
 import { byteStream, fakeContext, node } from './helpers';
@@ -228,7 +229,11 @@ describe('localmindApiRequest', () => {
 			{ error: { message: 'Rate limit', type: 'rate_limit_error' } },
 			2,
 		],
-		['a proxy page (never reached Localmind)', '<html>429 Too Many Requests</html>', 2],
+		[
+			'a text page (a proxy may have replaced Localmind’s answer)',
+			'<html>429 Too Many Requests</html>',
+			1,
+		],
 		[
 			'Localmind up to 1.6.0 (maybe after tools ran)',
 			{ detail: 'Rate limit exceeded', error_code: 'RATE_LIMIT_EXCEEDED' },
@@ -250,6 +255,28 @@ describe('localmindApiRequest', () => {
 			.catch(() => undefined);
 
 		expect(httpRequestWithAuthentication).toHaveBeenCalledTimes(calls);
+	});
+
+	it('masks the API key when an error echoes it', async () => {
+		const echoedKey = 'placeholder-key-for-the-test';
+		const { context } = fakeContext([
+			{ statusCode: 400, body: { detail: `Bad header: Bearer ${echoedKey}` } },
+		]);
+		Object.assign(context, {
+			getCredentials: async () => ({ url: 'https://acme-api.example.com', apiKey: echoedKey }),
+		});
+
+		await expect(
+			localmindApiRequest.call(context, { method: 'GET', path: '/models' }),
+		).rejects.toMatchObject({ message: 'Localmind: Bad header: Bearer ***' });
+	});
+
+	it('gives every request a timeout, five minutes unless it sets its own', async () => {
+		const { context, httpRequestWithAuthentication } = fakeContext([{ body: {} }]);
+
+		await localmindApiRequest.call(context, { method: 'GET', path: '/models' });
+
+		expect(httpRequestWithAuthentication.mock.calls[0][1]).toMatchObject({ timeout: 300_000 });
 	});
 
 	it('sends an empty JSON body as "{}", which n8n would otherwise drop', async () => {
@@ -283,6 +310,32 @@ describe('localmindApiRequest', () => {
 		await expect(request).rejects.toMatchObject({
 			message: 'Localmind: no answer within 1 minute(s)',
 		});
+	});
+
+	it('tries a read that ran out of time once more, an upload never, and says it may have arrived', async () => {
+		const { context, httpRequestWithAuthentication } = fakeContext([]);
+		httpRequestWithAuthentication.mockRejectedValue(
+			networkError('ECONNABORTED', 'timeout of 300000ms exceeded'),
+		);
+
+		await expect(
+			localmindApiRequest.call(context, { method: 'GET', path: '/models' }),
+		).rejects.toMatchObject({ message: 'Localmind: no answer within 5 minute(s)' });
+		expect(httpRequestWithAuthentication).toHaveBeenCalledTimes(2);
+
+		await expect(
+			localmindApiRequest.call(context, {
+				method: 'POST',
+				path: '/spaces/s1/data/upload',
+				body: Buffer.from('file'),
+				timeout: UPLOAD_TIMEOUT_MS,
+			}),
+		).rejects.toMatchObject({
+			message: 'Localmind: no answer within 60 minute(s)',
+			description: expect.stringContaining('may have received the request'),
+		});
+		expect(httpRequestWithAuthentication).toHaveBeenCalledTimes(3);
+		expect(httpRequestWithAuthentication.mock.calls[2][1]).toMatchObject({ timeout: 3_600_000 });
 	});
 
 	it('counts a 404 on a retried DELETE as done: the first try worked but lost its answer', async () => {

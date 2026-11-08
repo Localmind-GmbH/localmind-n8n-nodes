@@ -31,4 +31,4 @@ This policy covers the code in this repository: the nodes, the credential, and t
 Every version is published from this repository by GitHub Actions, with npm provenance:
 
 - `npm audit signatures` in a project that installed the package verifies its registry signature and provenance.
-- The package file attached to each GitHub release can be verified with `gh attestation verify <file> --repo Localmind-GmbH/localmind-n8n-nodes`, and its SHA-256 compared with the release's `SHA256SUMS`.
+- The package file attached to each GitHub release can be verified with `gh attestation verify <file> --repo Localmind-GmbH/localmind-n8n-nodes --signer-workflow Localmind-GmbH/localmind-n8n-nodes/.github/workflows/publish.yml --source-ref refs/heads/main`, which confirms that this repository's release workflow built it from `main`, and its SHA-256 compared with the release's `SHA256SUMS`.

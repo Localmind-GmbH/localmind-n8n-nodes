@@ -410,6 +410,44 @@ describe('File → Download', () => {
 	});
 });
 
+describe('file-manager paths', () => {
+	it("uses the last part of a binary's file name that carries a path", async () => {
+		const { context, requests } = routedContext(
+			() => ({ body: { relative_path: 'offer.pdf', status: 'stored' } }),
+			{ space: 's1', binaryPropertyName: 'data', options: { waitForProcessing: false } },
+			{ data: { mimeType: 'application/pdf', fileName: 'C:\\fakepath\\offer.pdf', data: '%PDF' } },
+		);
+
+		await executeFile.call(context, 'upload', 0).catch(() => undefined);
+
+		expect(Buffer.from(requests[0].body as Buffer).toString()).toContain(
+			'name="path"\r\n\r\noffer.pdf',
+		);
+	});
+
+	it('refuses an upload file name with a slash, which would pick another folder', async () => {
+		const { context, requests } = routedContext(
+			() => ({ body: {} }),
+			{ space: 's1', binaryPropertyName: 'data', options: { fileName: 'other/offer.pdf' } },
+			{ data: { mimeType: 'application/pdf', fileName: 'offer.pdf', data: '%PDF' } },
+		);
+
+		await expect(executeFile.call(context, 'upload', 0)).rejects.toThrow('has a "/" or');
+		expect(requests).toEqual([]);
+	});
+
+	it.each([
+		['move', { path: 'contracts/offer.pdf', newPath: '../other-space/offer.pdf' }],
+		['delete', { path: 'contracts/./offer.pdf' }],
+		['download', { path: 'a\\..\\b.pdf' }],
+	])('refuses "." and ".." segments before sending anything (%s)', async (operation, params) => {
+		const { context, requests } = routedContext(() => ({ body: {} }), { space: 's1', ...params });
+
+		await expect(executeFile.call(context, operation, 0)).rejects.toThrow('"." or ".." segment');
+		expect(requests).toEqual([]);
+	});
+});
+
 describe('Job → Get', () => {
 	it('waits until the run has finished and reports its error', async () => {
 		const statuses = ['RUNNING', 'RUNNING', 'FAILED'];

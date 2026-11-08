@@ -21,7 +21,14 @@ export interface GeneratedFile {
 }
 
 const GENERIC_MIME_TYPE = 'application/octet-stream';
-const DOWNLOAD_PREFIX = /\/(?:v1\/)?storage\/download\//;
+/**
+ * A download link: a path, or an absolute URL, whose path leads to the download endpoint, also
+ * behind a path prefix such as a proxy's. Only the path counts: the endpoint inside another link's
+ * query or fragment, or after "//" (another host), is no download link. Case-sensitive, as
+ * Localmind's paths are. The file is fetched from the credential's API URL in any case.
+ */
+const DOWNLOAD_PREFIX =
+	/^\s*(?:[A-Za-z][A-Za-z\d+.-]*:\/\/[^/?#\s]*|(?!\/\/))(?:\/[^/?#\s]+)*?(?=\/(?:v1\/)?storage\/download\/)/;
 // The only query Localmind adds to its download links; the backend derives it from the path anyway.
 const ORG_QUERY = /\?org_id=[^/?#]*$/i;
 const ENCODED = /%[0-9a-f]{2}/i;
@@ -96,7 +103,7 @@ export function downloadLinkPath(
 ): string | undefined {
 	const match = DOWNLOAD_PREFIX.exec(url);
 	if (!match) return undefined;
-	let path = url.slice(match.index).trim().replace(ORG_QUERY, '');
+	let path = url.slice(match[0].length).trim().replace(ORG_QUERY, '');
 	if (!path.startsWith('/v1/')) path = `/v1${path}`;
 	const keep =
 		URL_SAFE.test(path) && (source === 'encoded' || (source === 'auto' && ENCODED.test(path)));
@@ -154,14 +161,12 @@ export function binaryMimeType(...mimeTypes: Array<string | undefined>): string 
 const MAX_FILE_NAME_BYTES = 200;
 
 /**
- * Control characters, and the direction marks that can disguise an extension: U+202E in
- * "report<U+202E>fdp.exe" makes it show as "reportexe.pdf".
+ * Control and invisible format characters: the direction marks that can disguise an extension
+ * (U+202E makes "report<U+202E>fdp.exe" show as "reportexe.pdf"), zero-width spaces, soft
+ * hyphens, byte-order marks. Kept are the joiners that Persian and other scripts and emoji
+ * sequences need (U+200C, U+200D) and the tag characters of flag emoji.
  */
-const isHiddenCharacter = (code: number) =>
-	code <= 0x1f ||
-	code === 0x7f ||
-	(code >= 0x202a && code <= 0x202e) ||
-	(code >= 0x2066 && code <= 0x2069);
+const HIDDEN_CHARACTER = /(?!\u200C|\u200D|[\u{E0020}-\u{E007F}])[\p{Cc}\p{Cf}]/u;
 
 /**
  * A file name from Localmind, safe for the steps after the node (saving the file, attaching it to a
@@ -170,7 +175,7 @@ const isHiddenCharacter = (code: number) =>
 export function safeFileName(name: string | undefined): string {
 	const last = (name ?? '').split(/[/\\]/).pop() ?? '';
 	const visible = Array.from(last)
-		.filter((char) => !isHiddenCharacter(char.codePointAt(0) ?? 0))
+		.filter((char) => !HIDDEN_CHARACTER.test(char))
 		.join('')
 		.trim();
 	const usable = visible === '.' || visible === '..' ? '' : visible;
@@ -192,23 +197,48 @@ export function safeFileName(name: string | undefined): string {
  * A generated file as the nodes list it: a safe name and type, for steps that build a path or a
  * mail from it. The link stays as Localmind sent it, for File → Download by URL.
  */
-export function fileDetails({ fileName, size, mimeType, url }: GeneratedFile): IDataObject {
+function fileDetails(
+	{ fileName, size, mimeType, url }: GeneratedFile,
+	isLabel: boolean,
+): IDataObject {
 	return {
 		fileName: safeFileName(fileName),
 		size,
 		mimeType: binaryMimeType(mimeType),
 		url,
-		...(isProvenanceFile(fileName) && { provenance: true }),
+		...(isLabel && { provenance: true }),
 	};
 }
 
+/** The generated files as the nodes list them, AI labels marked `provenance: true`. */
+export function listFiles(files: GeneratedFile[]): IDataObject[] {
+	const labels = labelIndexes(files);
+	return files.map((file, index) => fileDetails(file, labels.has(index)));
+}
+
+const LABEL_SUFFIX = '.provenance.json';
+
+/** An AI label is a small JSON file; one larger than this is not downloaded. */
+const MAX_LABEL_BYTES = 1024 * 1024;
+
 /**
- * From Localmind 1.7.0, an AI label (EU AI Act) for a generated file whose format has no room for
- * one, such as a CSV or JSON file: "<file name>.provenance.json". It is passed on with the file,
- * but not counted towards 'Max Files to Download'; the labels have their own count, of the same size.
+ * Which files are AI labels: from Localmind 1.7.0, a generated CSV or JSON file, whose format has
+ * no room for an AI label (EU AI Act), comes with "<file name>.provenance.json". A label counts
+ * only next to its file in the list, since the agent, or a prompt injected into it, chooses the
+ * names. Labels are not counted towards 'Max Files to Download' but have their own count of the
+ * same size, and at most 1 MB each.
  */
-export const isProvenanceFile = (fileName: string) =>
-	fileName.toLowerCase().endsWith('.provenance.json');
+function labelIndexes(files: GeneratedFile[]): Set<number> {
+	const names = new Set(files.map((file) => file.fileName));
+	const labels = new Set<number>();
+	for (const [index, { fileName }] of files.entries()) {
+		const isLabel =
+			fileName.toLowerCase().endsWith(LABEL_SUFFIX) &&
+			names.has(fileName.slice(0, -LABEL_SUFFIX.length));
+		if (isLabel) labels.add(index);
+	}
+	return labels;
+}
 
 /** The prefix of the binary fields for generated files: file_0, file_1, … */
 export const DEFAULT_BINARY_PREFIX = 'file_';
@@ -247,15 +277,24 @@ export function downloadSettings(
 	options: DownloadOptions,
 ): DownloadSettings {
 	const toolMode = this.getNode().type.endsWith('Tool');
-	const positive = (value: unknown, fallback: number) =>
-		typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback;
 	return {
 		download: options.downloadFiles ?? !toolMode,
 		prefix: binaryPrefix(options.binaryPropertyPrefix),
 		maxFiles: Math.floor(positive(options.maxFiles, DEFAULT_MAX_FILES)),
-		maxBytes: positive(options.maxFileSizeMb, DEFAULT_MAX_FILE_SIZE_MB) * 1024 * 1024,
+		maxBytes: maxFileBytes(options.maxFileSizeMb),
 	};
 }
+
+const positive = (value: unknown, fallback: number) =>
+	typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback;
+
+/** A size in MB for messages: "50 MB", "1.5 MB". */
+export const megabytes = (bytes: number) =>
+	`${Number((bytes / 1024 / 1024).toFixed(1)).toLocaleString('en')} MB`;
+
+/** A "Max File Size (MB)" option in bytes; 50 MB when it is not a positive number. */
+export const maxFileBytes = (megabytes: unknown) =>
+	Math.floor(positive(megabytes, DEFAULT_MAX_FILE_SIZE_MB) * 1024 * 1024);
 
 /**
  * Lists the generated files on the item and, if wanted, downloads them as binary fields
@@ -269,17 +308,23 @@ export async function attachGeneratedFiles(
 	settings: DownloadSettings,
 	itemIndex: number,
 ): Promise<void> {
-	const details = files.map(fileDetails);
+	const labels = labelIndexes(files);
+	const details = files.map((file, index) => fileDetails(file, labels.has(index)));
 	item.json.files = details;
 	if (!settings.download || files.length === 0) return;
 
-	const megabytes = `${Math.round(settings.maxBytes / 1024 / 1024)} MB`;
 	const binary: IBinaryKeyData = {};
 	// AI labels have a count of their own, so they cannot push a file out, nor a server send endless ones.
 	const counts = { files: 0, labels: 0 };
 	for (const [index, file] of files.entries()) {
-		const kind = isProvenanceFile(file.fileName) ? 'labels' : 'files';
+		const kind = labels.has(index) ? 'labels' : 'files';
 		const beyondLimit = counts[kind]++ >= settings.maxFiles;
+		const maxBytes =
+			kind === 'labels' ? Math.min(settings.maxBytes, MAX_LABEL_BYTES) : settings.maxBytes;
+		const tooLarge =
+			kind === 'labels' && maxBytes < settings.maxBytes
+				? 'Not downloaded: larger than 1 MB, the limit for AI-label files'
+				: `Not downloaded: larger than ${megabytes(maxBytes)} ('Max File Size (MB)')`;
 		if (!isSafeDownloadPath(file.path)) {
 			details[index].errorMessage = UNSAFE_LINK_REFUSAL;
 			continue;
@@ -289,20 +334,18 @@ export async function attachGeneratedFiles(
 				`Not downloaded: more than ${settings.maxFiles} ${kind === 'labels' ? 'AI-label files' : 'files'} ('Max Files to Download')`;
 			continue;
 		}
-		if (typeof file.size === 'number' && file.size > settings.maxBytes) {
-			details[index].errorMessage =
-				`Not downloaded: larger than ${megabytes} ('Max File Size (MB)')`;
+		if (typeof file.size === 'number' && file.size > maxBytes) {
+			details[index].errorMessage = tooLarge;
 			continue;
 		}
 		try {
 			const { data, contentType } = await localmindApiDownload.call(
 				this,
 				{ method: 'GET', path: file.path, itemIndex },
-				settings.maxBytes,
+				maxBytes,
 			);
-			if (data.length > settings.maxBytes) {
-				details[index].errorMessage =
-					`Not downloaded: larger than ${megabytes} ('Max File Size (MB)')`;
+			if (data.length > maxBytes) {
+				details[index].errorMessage = tooLarge;
 				continue;
 			}
 			const property = `${settings.prefix}${index}`;

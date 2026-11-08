@@ -86,6 +86,9 @@ function expiry(ms: number): Promise<'expired'> {
 	});
 }
 
+/** The most one streamed answer may send: Localmind's answers are text, far below this. */
+const MAX_STREAM_BYTES = 32 * 1024 * 1024;
+
 /** The tool n8n's AI Agent adds for an output parser ("Require Specific Output Format"). */
 export const OUTPUT_PARSER_TOOL = 'format_final_json_response';
 
@@ -287,7 +290,7 @@ export class LocalmindChatModel extends BaseChatModel {
 		let collected = '';
 		let sawText = false;
 		let streamId: string | undefined;
-		const events = parseSSEStream(body)[Symbol.asyncIterator]();
+		const events = parseSSEStream(this.capped(body))[Symbol.asyncIterator]();
 		const timeoutMs = this.requests.streamTimeoutMs;
 		const expired = timeoutMs === undefined ? undefined : expiry(timeoutMs);
 		try {
@@ -327,6 +330,25 @@ export class LocalmindChatModel extends BaseChatModel {
 			// Localmind keeps the connection open after [DONE] while it cleans up; a thrown error or an
 			// early stop would leave it open too. Close it in every case.
 			await closeStream(events, body);
+		}
+	}
+
+	/**
+	 * The stream, failing past MAX_STREAM_BYTES: an answer that never ends, or one endless line
+	 * the event parser would collect, must not fill n8n's memory before the timeout.
+	 */
+	private async *capped(
+		body: AsyncIterable<Buffer | Uint8Array>,
+	): AsyncIterableIterator<Buffer | Uint8Array> {
+		let size = 0;
+		for await (const chunk of body) {
+			size += chunk.length;
+			if (size > MAX_STREAM_BYTES) {
+				throw new NodeOperationError(this.node, 'The answer stream from Localmind is too large', {
+					description: `Localmind sent more than ${MAX_STREAM_BYTES / 1024 / 1024} MB for one answer. Check the agent in the Localmind app.`,
+				});
+			}
+			yield chunk;
 		}
 	}
 
@@ -452,6 +474,8 @@ export class LocalmindChatModel extends BaseChatModel {
 		try {
 			return await pending;
 		} catch (error) {
+			// The node's own errors, such as the size limit, pass as they are (n8n returns them as is).
+			if (error instanceof NodeOperationError) throw new NodeOperationError(this.node, error);
 			throw new NodeOperationError(this.node, 'The answer stream from Localmind broke off', {
 				description: `${(error as Error).message || 'The connection closed'}. No data arrived within the timeout, or the connection dropped. Localmind stops an answer after 10 minutes.`,
 			});

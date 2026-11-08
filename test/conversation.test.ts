@@ -116,6 +116,8 @@ describe('Conversation → Send Message', () => {
 			{ space_id: 's1', persist: 'true', conversation_id: 'c1', agent_id: 'ag2' },
 		]);
 		const sent = requests.find((request) => request.url.endsWith('/messages-async'));
+		// Only references to the uploaded files: the normal timeout, not the one for uploads.
+		expect((sent as { timeout?: number }).timeout).toBe(300_000);
 		expect(sent?.body).toEqual({
 			message: 'Fix the sheet',
 			attachments: [
@@ -148,6 +150,23 @@ describe('Conversation → Send Message', () => {
 			message: 'Localmind refused the images of the message (upload_type_unsupported)',
 			description: expect.stringContaining("space's chat settings"),
 		});
+	});
+
+	it('checks the tool IDs before uploading anything, so a typo leaves no upload behind', async () => {
+		const { context, requests } = routedContext(
+			sendMessageApi(),
+			{
+				conversation: 'c1',
+				message: 'Read this',
+				options: { attachments: 'contract', disabledToolIds: 'not-a-tool' },
+			},
+			{ contract: { mimeType: 'application/pdf', fileName: 'contract.pdf', data: '%PDF' } },
+		);
+
+		await expect(executeConversation.call(context, 'sendMessage', 0)).rejects.toThrow(
+			'"not-a-tool" is not a tool ID',
+		);
+		expect(requests).toEqual([]);
 	});
 
 	it('sends attachments and disabled tools, waits, and returns the answer with its files', async () => {

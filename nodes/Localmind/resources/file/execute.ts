@@ -11,10 +11,16 @@ import {
 	binaryMimeType,
 	downloadLinkPath,
 	isDownloadLink,
+	maxFileBytes,
+	megabytes,
 	safeFileName,
 	UNSAFE_LINK_REFUSAL,
 } from '../../../shared/files';
-import { localmindApiDownload, localmindApiRequest } from '../../../shared/transport';
+import {
+	localmindApiDownload,
+	localmindApiRequest,
+	UPLOAD_TIMEOUT_MS,
+} from '../../../shared/transport';
 import { normalizeFolder, textParam } from '../../../shared/params';
 import { Deadline, isCancelled, timeoutMs } from '../../../shared/polling';
 import { entriesIn, isLinked, listEntries } from './folders';
@@ -39,7 +45,24 @@ const DEFAULT_UPLOAD_TIMEOUT_MINUTES = 10;
 // Localmind stores these without indexing them; up to 1.5.0 it tries anyway and marks them failed.
 const STORED_ONLY = /\.(mp3|wav|m4a|ogg|html?)$/i;
 
-const filePath = (value: unknown) => textParam(value).trim().replace(/^\/+/, '');
+/**
+ * A file-manager path, from the space root. A "." or ".." segment could lead out of the space or
+ * to another file than meant, so it is refused before anything is sent.
+ */
+function plainPath(this: IExecuteFunctions, path: string, itemIndex: number): string {
+	if (path.split(/[/\\]/).some((segment) => segment === '.' || segment === '..')) {
+		throw new NodeOperationError(this.getNode(), `The path "${path}" has a "." or ".." segment`, {
+			itemIndex,
+			description: 'Use the path from the space root, e.g. "contracts/2024/offer.pdf".',
+		});
+	}
+	return path;
+}
+
+function filePath(this: IExecuteFunctions, name: string, itemIndex: number): string {
+	const value = textParam(this.getNodeParameter(name, itemIndex)).trim().replace(/^\/+/, '');
+	return plainPath.call(this, value, itemIndex);
+}
 
 function spacePath(this: IExecuteFunctions, itemIndex: number): { spaceId: string; base: string } {
 	const spaceId = this.getNodeParameter('space', itemIndex, '', { extractValue: true }) as string;
@@ -51,11 +74,20 @@ async function download(
 	apiPath: string,
 	itemIndex: number,
 ): Promise<INodeExecutionData> {
-	const { data, contentType } = await localmindApiDownload.call(this, {
-		method: 'GET',
-		path: apiPath,
-		itemIndex,
-	});
+	const options = this.getNodeParameter('options', itemIndex, {}) as { maxFileSizeMb?: unknown };
+	const maxBytes = maxFileBytes(options.maxFileSizeMb);
+	const { data, contentType } = await localmindApiDownload.call(
+		this,
+		{ method: 'GET', path: apiPath, itemIndex },
+		maxBytes,
+	);
+	if (data.length > maxBytes) {
+		throw new NodeOperationError(
+			this.getNode(),
+			`The file is larger than ${megabytes(maxBytes)} ('Max File Size (MB)')`,
+			{ itemIndex, description: "Raise 'Max File Size (MB)' in the options to download it." },
+		);
+	}
 	const last = apiPath.split('/').pop() || 'file';
 	let decoded = last;
 	try {
@@ -79,13 +111,23 @@ async function upload(this: IExecuteFunctions, itemIndex: number): Promise<IData
 	const folder = normalizeFolder(this.getNodeParameter('folder', itemIndex, ''));
 	const options = this.getNodeParameter('options', itemIndex, {}) as UploadOptions;
 	const binary = this.helpers.assertBinaryData(itemIndex, property);
-	let fileName = textParam(options.fileName).trim() || binary.fileName || 'file';
+	const ownName = textParam(options.fileName).trim();
+	// A slash in 'File Name' would put the file into another folder than 'Folder' says. A name that
+	// comes with the binary may carry a path (C:\fakepath\offer.pdf from a browser form): its last
+	// part counts.
+	let fileName = ownName || binary.fileName?.split(/[/\\]/).pop() || 'file';
+	if (ownName && /[/\\]/.test(ownName)) {
+		throw new NodeOperationError(this.getNode(), `The file name "${fileName}" has a "/" or "\\"`, {
+			itemIndex,
+			description: "Give the file name only, and the folder in 'Folder'.",
+		});
+	}
 	// Localmind decides by the extension whether and how it processes a file.
 	if (!/\.[^./]+$/.test(fileName) && binary.fileExtension) {
 		fileName = `${fileName}.${binary.fileExtension}`;
 	}
 	const { body, contentType } = multipartBody(
-		{ path: folder ? `${folder}/${fileName}` : fileName },
+		{ path: plainPath.call(this, folder ? `${folder}/${fileName}` : fileName, itemIndex) },
 		{
 			field: 'file',
 			fileName,
@@ -106,6 +148,7 @@ async function upload(this: IExecuteFunctions, itemIndex: number): Promise<IData
 		path: `${base}/upload`,
 		body,
 		headers: { 'content-type': contentType },
+		timeout: UPLOAD_TIMEOUT_MS,
 		itemIndex,
 	})) as UploadResponse;
 	const result: IDataObject = {
@@ -211,7 +254,11 @@ export async function executeFile(
 
 		case 'list': {
 			const { spaceId } = spacePath.call(this, itemIndex);
-			const folder = normalizeFolder(this.getNodeParameter('folder', itemIndex, ''));
+			const folder = plainPath.call(
+				this,
+				normalizeFolder(this.getNodeParameter('folder', itemIndex, '')),
+				itemIndex,
+			);
 			const recursive = this.getNodeParameter('includeSubfolders', itemIndex, false) as boolean;
 			const entries = await listEntries.call(this, spaceId, folder, itemIndex);
 			return entriesIn(entries, folder, recursive).map((entry) => ({
@@ -228,7 +275,7 @@ export async function executeFile(
 
 		case 'download': {
 			const { base } = spacePath.call(this, itemIndex);
-			const path = filePath(this.getNodeParameter('path', itemIndex));
+			const path = filePath.call(this, 'path', itemIndex);
 			const { url } = (await localmindApiRequest.call(this, {
 				method: 'GET',
 				path: `${base}/download`,
@@ -259,7 +306,8 @@ export async function executeFile(
 			if (!apiPath) {
 				throw new NodeOperationError(this.getNode(), `"${url}" is not a Localmind download link`, {
 					itemIndex,
-					description: 'Download links contain /storage/download/.',
+					description:
+						"A download link's path leads to /v1/storage/download/, as in the links Localmind returns. The file is always fetched from the credential's API URL.",
 				});
 			}
 			return [await download.call(this, apiPath, itemIndex)];
@@ -267,8 +315,8 @@ export async function executeFile(
 
 		case 'move': {
 			const { base } = spacePath.call(this, itemIndex);
-			const oldPath = filePath(this.getNodeParameter('path', itemIndex));
-			const newPath = filePath(this.getNodeParameter('newPath', itemIndex));
+			const oldPath = filePath.call(this, 'path', itemIndex);
+			const newPath = filePath.call(this, 'newPath', itemIndex);
 			await localmindApiRequest.call(this, {
 				method: 'PATCH',
 				path: `${base}/rename`,
@@ -280,7 +328,7 @@ export async function executeFile(
 
 		case 'delete': {
 			const { base } = spacePath.call(this, itemIndex);
-			const path = filePath(this.getNodeParameter('path', itemIndex));
+			const path = filePath.call(this, 'path', itemIndex);
 			await localmindApiRequest.call(this, {
 				method: 'DELETE',
 				path: `${base}/files`,
