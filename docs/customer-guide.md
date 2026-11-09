@@ -9,11 +9,11 @@ The other direction, a Localmind agent calling an n8n workflow, needs no package
 
 ## Requirements
 
-| What             | Version                                                                                                                                      |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| n8n, self-hosted | 2.16 or later (2.21 or later for the environment-managed package list)                                                                       |
-| Localmind        | 1.0.0 or later (tested on 1.5.0; older versions are being confirmed). Some features need a newer version; see [Known limits](#known-limits). |
-| Network          | n8n must reach your Localmind API host. Use HTTPS.                                                                                           |
+| What             | Version                                                                                                                                                                           |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| n8n, self-hosted | 2.16 or later (2.21 or later for the environment-managed package list)                                                                                                            |
+| Localmind        | 1.0.0 or later (tested on 1.6.0, and on 1.5.0 without code execution; older versions are being confirmed). Some features need a newer version; see [Known limits](#known-limits). |
+| Network          | n8n must reach your Localmind API host. Use HTTPS.                                                                                                                                |
 
 ## 1. Create an API key
 
@@ -193,6 +193,7 @@ The Localmind node can be a tool of n8n's AI Agent. The AI Agent's model then fi
 - Folders cannot be created empty, deleted or copied through the API. A folder appears when you upload a file into it.
 - Web sources and tables (reading or appending rows) are not available through the API yet.
 - Uploads are limited to 20 per minute per user; the node waits and retries automatically. Up to Localmind 1.5.0 the limit can count all users together, so other people's uploads use it up too.
+- Up to Localmind 1.6.0, a generated file whose name contains characters outside Latin-1 (for example "–" or an emoji) cannot be downloaded: Localmind answers with a server error, in the app too. The node puts the error in that file's `errorMessage` and keeps the answer. Localmind 1.7.0 fixes this.
 - Images the agent creates with its image tool are not returned as binary fields. With Agent → Ask they come as Markdown links at the start of the answer, which File → Download by URL can fetch; in conversations they show in the Localmind app. Files from code execution (Excel, Word, PDF, charts saved as files) are returned.
 - Files an agent generates are not saved to a space by themselves. To keep one in the data pool, pass the binary field (`file_0`, … by default) to File → Upload.
 - Ask and Send Message download at most 10 generated files of up to 50 MB each by default ('Max Files to Download', 'Max File Size (MB)'). Larger or further files stay listed with their link and can be fetched with File → Download by URL, which has its own 'Max File Size (MB)' option (50 MB by default).
