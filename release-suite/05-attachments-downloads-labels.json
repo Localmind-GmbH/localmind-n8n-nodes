@@ -1,0 +1,532 @@
+{
+	"name": "Localmind release check 5: attachments, downloads and AI labels",
+	"nodes": [
+		{
+			"parameters": {},
+			"name": "Start",
+			"type": "n8n-nodes-base.manualTrigger",
+			"typeVersion": 1,
+			"position": [0, 0]
+		},
+		{
+			"parameters": {
+				"jsCode": "// Fill in the IDs of your test setup and the Localmind version under test, then run the\n// workflow. For the development version, give the next release (for example 1.7.0).\nreturn [{ json: {\n    \"agentId\": \"PASTE-ID-OF-AN-AGENT-WITH-CODE-EXECUTION\",\n    \"spaceId\": \"PASTE-SPACE-ID\",\n    \"folder\": \"release-check\",\n    \"localmindVersion\": \"PASTE-LOCALMIND-VERSION\"\n  } }];"
+			},
+			"name": "Settings",
+			"type": "n8n-nodes-base.code",
+			"typeVersion": 2,
+			"position": [220, 0]
+		},
+		{
+			"parameters": {
+				"jsCode": "// 1.5 MB, with a name that carries a Windows path, as browser forms send it: only its last part counts.\nconst name = `release-large-${Date.now()}.txt`;\nreturn [{ json: { name }, binary: { data: {\n  data: Buffer.from('x'.repeat(1500000)).toString('base64'),\n  mimeType: 'text/plain',\n  fileName: `C:\\\\fakepath\\\\${name}`,\n} } }];"
+			},
+			"name": "Make Large File",
+			"type": "n8n-nodes-base.code",
+			"typeVersion": 2,
+			"position": [440, 0]
+		},
+		{
+			"parameters": {
+				"resource": "file",
+				"operation": "upload",
+				"space": {
+					"__rl": true,
+					"mode": "id",
+					"value": "={{ $('Settings').first().json.spaceId }}"
+				},
+				"binaryPropertyName": "data",
+				"folder": "={{ $('Settings').first().json.folder }}",
+				"options": {
+					"waitForProcessing": false
+				}
+			},
+			"name": "Upload Large File",
+			"type": "@localmind/n8n-nodes-localmind.localmind",
+			"typeVersion": 1,
+			"position": [660, 0],
+			"credentials": {
+				"localmindApi": {
+					"id": "",
+					"name": "Localmind API"
+				}
+			},
+			"onError": "continueRegularOutput"
+		},
+		{
+			"parameters": {
+				"resource": "file",
+				"operation": "download",
+				"space": {
+					"__rl": true,
+					"mode": "id",
+					"value": "={{ $('Settings').first().json.spaceId }}"
+				},
+				"path": "={{ $('Upload Large File').first().json.path }}",
+				"options": {
+					"maxFileSizeMb": 1
+				}
+			},
+			"name": "Download Over Limit",
+			"type": "@localmind/n8n-nodes-localmind.localmind",
+			"typeVersion": 1,
+			"position": [880, 0],
+			"credentials": {
+				"localmindApi": {
+					"id": "",
+					"name": "Localmind API"
+				}
+			},
+			"onError": "continueRegularOutput"
+		},
+		{
+			"parameters": {
+				"resource": "file",
+				"operation": "download",
+				"space": {
+					"__rl": true,
+					"mode": "id",
+					"value": "={{ $('Settings').first().json.spaceId }}"
+				},
+				"path": "={{ $('Upload Large File').first().json.path }}"
+			},
+			"name": "Download In Full",
+			"type": "@localmind/n8n-nodes-localmind.localmind",
+			"typeVersion": 1,
+			"position": [1100, 0],
+			"credentials": {
+				"localmindApi": {
+					"id": "",
+					"name": "Localmind API"
+				}
+			},
+			"onError": "continueRegularOutput"
+		},
+		{
+			"parameters": {
+				"resource": "file",
+				"operation": "delete",
+				"space": {
+					"__rl": true,
+					"mode": "id",
+					"value": "={{ $('Settings').first().json.spaceId }}"
+				},
+				"path": "={{ $('Upload Large File').first().json.path }}"
+			},
+			"name": "Delete Large File",
+			"type": "@localmind/n8n-nodes-localmind.localmind",
+			"typeVersion": 1,
+			"position": [1320, 0],
+			"credentials": {
+				"localmindApi": {
+					"id": "",
+					"name": "Localmind API"
+				}
+			},
+			"onError": "continueRegularOutput"
+		},
+		{
+			"parameters": {
+				"resource": "conversation",
+				"operation": "create",
+				"agent": {
+					"__rl": true,
+					"mode": "id",
+					"value": "={{ $('Settings').first().json.agentId }}"
+				},
+				"space": {
+					"__rl": true,
+					"mode": "id",
+					"value": "={{ $('Settings').first().json.spaceId }}"
+				},
+				"title": "=Release check 05 {{ $now.toISO() }}"
+			},
+			"name": "Create Conversation",
+			"type": "@localmind/n8n-nodes-localmind.localmind",
+			"typeVersion": 1,
+			"position": [1540, 0],
+			"credentials": {
+				"localmindApi": {
+					"id": "",
+					"name": "Localmind API"
+				}
+			},
+			"onError": "continueRegularOutput"
+		},
+		{
+			"parameters": {
+				"jsCode": "// A PDF with a secret code, a CSV (column b adds up to 16) and an executable, which Localmind refuses.\nconst objs = [\n  \"<< /Type /Catalog /Pages 2 0 R >>\",\n  \"<< /Type /Pages /Kids [3 0 R] /Count 1 >>\",\n  \"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 420 144] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\",\n  null,\n  \"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\",\n];\nconst content = \"BT /F1 16 Tf 20 80 Td (The secret code is LIGHTHOUSE-7319.) Tj ET\";\nlet pdf = \"%PDF-1.4\\n\"; const offsets = [];\nobjs.forEach((o, i) => { offsets.push(pdf.length); pdf += (i + 1) + \" 0 obj\\n\" + (o ?? \"<< /Length \" + content.length + \" >>\\nstream\\n\" + content + \"\\nendstream\") + \"\\nendobj\\n\"; });\nconst xref = pdf.length;\npdf += \"xref\\n0 \" + (objs.length + 1) + \"\\n0000000000 65535 f \\n\" + offsets.map((o) => String(o).padStart(10, \"0\") + \" 00000 n \\n\").join(\"\") + \"trailer\\n<< /Size \" + (objs.length + 1) + \" /Root 1 0 R >>\\nstartxref\\n\" + xref + \"\\n%%EOF\\n\";\nconst csv = \"a;b\\n1;2\\n3;4\\n5;10\\n\";\nreturn [{ json: {}, binary: {\n  csv: { data: Buffer.from(csv).toString(\"base64\"), mimeType: \"text/csv\", fileName: \"Zahlen Übersicht.csv\" },\n  pdf: { data: Buffer.from(pdf, \"latin1\").toString(\"base64\"), mimeType: \"application/pdf\", fileName: \"Notiz.pdf\" },\n  exe: { data: \"TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAA=\", mimeType: \"application/x-msdownload\", fileName: \"tool.exe\" },\n} }];"
+			},
+			"name": "Make Attachments",
+			"type": "n8n-nodes-base.code",
+			"typeVersion": 2,
+			"position": [1760, 0]
+		},
+		{
+			"parameters": {
+				"resource": "conversation",
+				"operation": "sendMessage",
+				"conversation": {
+					"__rl": true,
+					"mode": "id",
+					"value": "={{ $('Create Conversation').first().json.id }}"
+				},
+				"message": "Look at the attached file.",
+				"waitForAnswer": false,
+				"options": {
+					"attachments": "exe"
+				}
+			},
+			"name": "Send Executable",
+			"type": "@localmind/n8n-nodes-localmind.localmind",
+			"typeVersion": 1,
+			"position": [1980, 0],
+			"credentials": {
+				"localmindApi": {
+					"id": "",
+					"name": "Localmind API"
+				}
+			},
+			"onError": "continueRegularOutput"
+		},
+		{
+			"parameters": {
+				"jsCode": "// A PDF with a secret code, a CSV (column b adds up to 16) and an executable, which Localmind refuses.\nconst objs = [\n  \"<< /Type /Catalog /Pages 2 0 R >>\",\n  \"<< /Type /Pages /Kids [3 0 R] /Count 1 >>\",\n  \"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 420 144] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\",\n  null,\n  \"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\",\n];\nconst content = \"BT /F1 16 Tf 20 80 Td (The secret code is LIGHTHOUSE-7319.) Tj ET\";\nlet pdf = \"%PDF-1.4\\n\"; const offsets = [];\nobjs.forEach((o, i) => { offsets.push(pdf.length); pdf += (i + 1) + \" 0 obj\\n\" + (o ?? \"<< /Length \" + content.length + \" >>\\nstream\\n\" + content + \"\\nendstream\") + \"\\nendobj\\n\"; });\nconst xref = pdf.length;\npdf += \"xref\\n0 \" + (objs.length + 1) + \"\\n0000000000 65535 f \\n\" + offsets.map((o) => String(o).padStart(10, \"0\") + \" 00000 n \\n\").join(\"\") + \"trailer\\n<< /Size \" + (objs.length + 1) + \" /Root 1 0 R >>\\nstartxref\\n\" + xref + \"\\n%%EOF\\n\";\nconst csv = \"a;b\\n1;2\\n3;4\\n5;10\\n\";\nreturn [{ json: {}, binary: {\n  csv: { data: Buffer.from(csv).toString(\"base64\"), mimeType: \"text/csv\", fileName: \"Zahlen Übersicht.csv\" },\n  pdf: { data: Buffer.from(pdf, \"latin1\").toString(\"base64\"), mimeType: \"application/pdf\", fileName: \"Notiz.pdf\" },\n  exe: { data: \"TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAA=\", mimeType: \"application/x-msdownload\", fileName: \"tool.exe\" },\n} }];"
+			},
+			"name": "Make Attachments Again",
+			"type": "n8n-nodes-base.code",
+			"typeVersion": 2,
+			"position": [2200, 0]
+		},
+		{
+			"parameters": {
+				"resource": "conversation",
+				"operation": "sendMessage",
+				"conversation": {
+					"__rl": true,
+					"mode": "id",
+					"value": "={{ $('Create Conversation').first().json.id }}"
+				},
+				"message": "Two files are attached. Give the secret code written in the PDF and the sum of column b in the CSV. Reply in one line only: CODE=<code>; SUM=<sum>",
+				"options": {
+					"attachments": "pdf, csv",
+					"timeoutMinutes": 10,
+					"downloadFiles": false
+				}
+			},
+			"name": "Send PDF and CSV",
+			"type": "@localmind/n8n-nodes-localmind.localmind",
+			"typeVersion": 1,
+			"position": [2420, 0],
+			"credentials": {
+				"localmindApi": {
+					"id": "",
+					"name": "Localmind API"
+				}
+			},
+			"onError": "continueRegularOutput"
+		},
+		{
+			"parameters": {
+				"jsCode": "// A PDF with a secret code, a CSV (column b adds up to 16) and an executable, which Localmind refuses.\nconst objs = [\n  \"<< /Type /Catalog /Pages 2 0 R >>\",\n  \"<< /Type /Pages /Kids [3 0 R] /Count 1 >>\",\n  \"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 420 144] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\",\n  null,\n  \"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\",\n];\nconst content = \"BT /F1 16 Tf 20 80 Td (The secret code is LIGHTHOUSE-7319.) Tj ET\";\nlet pdf = \"%PDF-1.4\\n\"; const offsets = [];\nobjs.forEach((o, i) => { offsets.push(pdf.length); pdf += (i + 1) + \" 0 obj\\n\" + (o ?? \"<< /Length \" + content.length + \" >>\\nstream\\n\" + content + \"\\nendstream\") + \"\\nendobj\\n\"; });\nconst xref = pdf.length;\npdf += \"xref\\n0 \" + (objs.length + 1) + \"\\n0000000000 65535 f \\n\" + offsets.map((o) => String(o).padStart(10, \"0\") + \" 00000 n \\n\").join(\"\") + \"trailer\\n<< /Size \" + (objs.length + 1) + \" /Root 1 0 R >>\\nstartxref\\n\" + xref + \"\\n%%EOF\\n\";\nconst csv = \"a;b\\n1;2\\n3;4\\n5;10\\n\";\nreturn [{ json: {}, binary: {\n  csv: { data: Buffer.from(csv).toString(\"base64\"), mimeType: \"text/csv\", fileName: \"Zahlen Übersicht.csv\" },\n  pdf: { data: Buffer.from(pdf, \"latin1\").toString(\"base64\"), mimeType: \"application/pdf\", fileName: \"Notiz.pdf\" },\n  exe: { data: \"TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAA=\", mimeType: \"application/x-msdownload\", fileName: \"tool.exe\" },\n} }];"
+			},
+			"name": "Make CSV",
+			"type": "n8n-nodes-base.code",
+			"typeVersion": 2,
+			"position": [2640, 0]
+		},
+		{
+			"parameters": {
+				"resource": "conversation",
+				"operation": "sendMessage",
+				"conversation": {
+					"__rl": true,
+					"mode": "id",
+					"value": "={{ $('Create Conversation').first().json.id }}"
+				},
+				"message": "What is the sum of column b in the attached CSV file? Reply with the number only.",
+				"options": {
+					"attachments": "csv",
+					"timeoutMinutes": 10,
+					"downloadFiles": false
+				}
+			},
+			"name": "Send CSV Only",
+			"type": "@localmind/n8n-nodes-localmind.localmind",
+			"typeVersion": 1,
+			"position": [2860, 0],
+			"credentials": {
+				"localmindApi": {
+					"id": "",
+					"name": "Localmind API"
+				}
+			},
+			"onError": "continueRegularOutput"
+		},
+		{
+			"parameters": {
+				"resource": "conversation",
+				"operation": "delete",
+				"conversation": {
+					"__rl": true,
+					"mode": "id",
+					"value": "={{ $('Create Conversation').first().json.id }}"
+				}
+			},
+			"name": "Delete Conversation",
+			"type": "@localmind/n8n-nodes-localmind.localmind",
+			"typeVersion": 1,
+			"position": [3080, 0],
+			"credentials": {
+				"localmindApi": {
+					"id": "",
+					"name": "Localmind API"
+				}
+			},
+			"onError": "continueRegularOutput"
+		},
+		{
+			"parameters": {
+				"resource": "agent",
+				"operation": "ask",
+				"agent": {
+					"__rl": true,
+					"mode": "id",
+					"value": "={{ $('Settings').first().json.agentId }}"
+				},
+				"prompt": "Use code execution to create a CSV file named exactly release-labels.csv with the header city,people and the rows Lindau,25000 and Bregenz,30000. Reply only with DONE."
+			},
+			"name": "Ask For CSV",
+			"type": "@localmind/n8n-nodes-localmind.localmind",
+			"typeVersion": 1,
+			"position": [3300, 0],
+			"credentials": {
+				"localmindApi": {
+					"id": "",
+					"name": "Localmind API"
+				}
+			},
+			"onError": "continueRegularOutput"
+		},
+		{
+			"parameters": {
+				"resource": "file",
+				"operation": "downloadByUrl",
+				"url": "={{ 'https://proxy.example.com/localmind' + (($('Ask For CSV').first().json.files || [])[0] || {}).url }}"
+			},
+			"name": "Download Behind Prefix",
+			"type": "@localmind/n8n-nodes-localmind.localmind",
+			"typeVersion": 1,
+			"position": [3520, 0],
+			"credentials": {
+				"localmindApi": {
+					"id": "",
+					"name": "Localmind API"
+				}
+			},
+			"onError": "continueRegularOutput"
+		},
+		{
+			"parameters": {
+				"jsCode": "// One report for everything above; the nodes before it go on after an error, so that the\n// conversation and the file are always deleted.\nconst result = (name) => $(name).first().json;\nconst problems = [];\nconst errorOf = (name) => String(result(name).error ?? '');\n\n// The version under test decides what is expected, so a 1.7.0 that falls back to the older\n// behaviour fails instead of passing as \"before 1.7.0\".\nconst version = String($('Settings').first().json.localmindVersion ?? '').trim();\nconst parts = /^(\\d+)\\.(\\d+)\\.\\d+/.exec(version);\nif (!parts) {\n  throw new Error(`Settings: give localmindVersion, the Localmind version under test (such as 1.6.0 or 1.7.0), not \"${version}\"`);\n}\nconst uploads = Number(parts[1]) > 1 || (Number(parts[1]) === 1 && Number(parts[2]) >= 7);\n\nconst upload = result('Upload Large File');\nconst folder = $('Settings').first().json.folder;\nif (!/^release-large-\\d+\\.txt$/.test(String(upload.path ?? '').replace(`${folder}/`, ''))) {\n  problems.push(`Upload: expected the name without its Windows path, got ${upload.path ?? errorOf('Upload Large File')}`);\n}\nif (!errorOf('Download Over Limit').includes(\"larger than 1 MB ('Max File Size (MB)')\")) {\n  problems.push(`Download over the limit: ${errorOf('Download Over Limit') || 'it was downloaded anyway'}`);\n}\nif (result('Download In Full').size !== 1500000) {\n  problems.push(`Full download: ${JSON.stringify(result('Download In Full'))}`);\n}\nif (result('Delete Large File').deleted !== true) problems.push(`Delete file: ${errorOf('Delete Large File')}`);\n\n// Localmind 1.7.0 refuses an executable upload; before 1.7.0 the node refuses it itself.\nconst executable = errorOf('Send Executable');\nconst executableRefused = uploads\n  ? /refused the attachment \"tool\\.exe\" \\(upload_type_runnable\\)/\n  : /\"tool\\.exe\" .* cannot be attached/;\nif (!executableRefused.test(executable)) {\n  problems.push(`Executable (Localmind ${version}): ${executable || 'it was sent'}`);\n}\n\n// From 1.7.0 the PDF and the CSV are uploaded and the agent answers from both; before 1.7.0 the\n// PDF is refused with a pointer to 1.7.0, and the message is not sent.\nconst both = result('Send PDF and CSV');\nconst attachments = uploads ? 'uploaded (Localmind 1.7.0 or later)' : 'PDF refused, as before Localmind 1.7.0';\nif (uploads) {\n  if (!both.text) {\n    problems.push(`PDF and CSV (Localmind ${version}): expected an answer from both files, got ${both.error}`);\n  } else if (!both.text.includes('LIGHTHOUSE-7319') || !/\\b16\\b/.test(both.text)) {\n    problems.push(`PDF and CSV: the answer lacks the code or the sum: ${both.text}`);\n  }\n} else if (!/\"Notiz\\.pdf\" \\(application\\/pdf\\) cannot be attached/.test(String(both.error))) {\n  problems.push(`PDF and CSV (Localmind ${version}): expected the PDF to be refused, got ${both.text ?? both.error}`);\n}\n// A CSV goes along on every version: uploaded from 1.7.0, as text before.\nconst csvOnly = result('Send CSV Only');\nif (!/\\b16\\b/.test(String(csvOnly.text ?? ''))) problems.push(`CSV only: ${csvOnly.text ?? csvOnly.error}`);\nif (result('Delete Conversation').deleted !== true) problems.push(`Delete conversation: ${errorOf('Delete Conversation')}`);\n\n// From 1.7.0 a generated CSV always comes with an AI label, \"<name>.provenance.json\", marked as\n// such; before 1.7.0 there is none.\nconst files = result('Ask For CSV').files ?? [];\nconst csvFile = files.find((file) => file.fileName === 'release-labels.csv');\nif (!csvFile?.binaryProperty) problems.push(`Ask: release-labels.csv missing or not downloaded: ${JSON.stringify(files)}`);\nconst labels = files.filter((file) => file.fileName.endsWith('.provenance.json'));\nif (uploads && !labels.some((label) => label.fileName === 'release-labels.csv.provenance.json')) {\n  problems.push(`AI label (Localmind ${version}): release-labels.csv.provenance.json missing: ${JSON.stringify(files)}`);\n}\nif (!uploads && labels.length) {\n  problems.push(`AI label (Localmind ${version}): none expected before 1.7.0, got ${JSON.stringify(labels)}`);\n}\nif (labels.some((label) => label.provenance !== true || !label.binaryProperty)) {\n  problems.push(`AI label not marked or not downloaded: ${JSON.stringify(labels)}`);\n}\n// A download link behind a path prefix (a proxy) leads to the same file.\nif (csvFile && result('Download Behind Prefix').size !== csvFile.size) {\n  problems.push(`Link behind a path prefix: ${JSON.stringify(result('Download Behind Prefix'))}`);\n}\n\nif (problems.length) throw new Error(problems.join(' | '));\nreturn [{ json: {\n  passed: 'Attachments, downloads and AI labels',\n  attachments,\n  localmindVersion: version,\n  aiLabels: labels.length ? 'present (Localmind 1.7.0 or later)' : 'none (before Localmind 1.7.0)',\n} }];"
+			},
+			"name": "Check",
+			"type": "n8n-nodes-base.code",
+			"typeVersion": 2,
+			"position": [3740, 0]
+		}
+	],
+	"connections": {
+		"Start": {
+			"main": [
+				[
+					{
+						"node": "Settings",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Settings": {
+			"main": [
+				[
+					{
+						"node": "Make Large File",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Make Large File": {
+			"main": [
+				[
+					{
+						"node": "Upload Large File",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Upload Large File": {
+			"main": [
+				[
+					{
+						"node": "Download Over Limit",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Download Over Limit": {
+			"main": [
+				[
+					{
+						"node": "Download In Full",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Download In Full": {
+			"main": [
+				[
+					{
+						"node": "Delete Large File",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Delete Large File": {
+			"main": [
+				[
+					{
+						"node": "Create Conversation",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Create Conversation": {
+			"main": [
+				[
+					{
+						"node": "Make Attachments",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Make Attachments": {
+			"main": [
+				[
+					{
+						"node": "Send Executable",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Send Executable": {
+			"main": [
+				[
+					{
+						"node": "Make Attachments Again",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Make Attachments Again": {
+			"main": [
+				[
+					{
+						"node": "Send PDF and CSV",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Send PDF and CSV": {
+			"main": [
+				[
+					{
+						"node": "Make CSV",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Make CSV": {
+			"main": [
+				[
+					{
+						"node": "Send CSV Only",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Send CSV Only": {
+			"main": [
+				[
+					{
+						"node": "Delete Conversation",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Delete Conversation": {
+			"main": [
+				[
+					{
+						"node": "Ask For CSV",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Ask For CSV": {
+			"main": [
+				[
+					{
+						"node": "Download Behind Prefix",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Download Behind Prefix": {
+			"main": [
+				[
+					{
+						"node": "Check",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		}
+	},
+	"settings": {
+		"executionOrder": "v1"
+	},
+	"pinData": {}
+}
