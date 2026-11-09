@@ -79,6 +79,8 @@ project _may_ contain example nodes and/or credentials that need to be
 - Make sure to use **proper types whenever possible**
 - If you are updating the npm package version, make sure to **update
   CHANGELOG.md** in the root of the repository
+- **Never publish** from a local machine (`npm publish`, `n8n-node release`):
+  releases come only from the GitHub Actions workflow, see `RELEASING.md`
 - Read `.agents/workflow.md` for more info
 
 ## Context-specific docs
