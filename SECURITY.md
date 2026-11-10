@@ -17,7 +17,7 @@ Helpful to include:
 
 Never include real API keys, passwords or customer data. If a key may have been exposed, deactivate it in Localmind and create a new one.
 
-We will confirm that we received the report, keep you updated while we work on it, and publish a fixed version together with a GitHub security advisory. Tell us if you would like to be credited.
+We confirm receipt within 5 working days and keep you informed until the problem is fixed. The fix comes as a new version together with a GitHub security advisory. Tell us if you would like to be credited.
 
 ## Scope
 

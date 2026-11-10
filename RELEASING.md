@@ -47,9 +47,10 @@ One-time steps, in this order.
 
 ### npm account
 
-- **Organization.** The `@localmind` scope belongs to the npm user account "localmind" today. Convert it into an npm organization (npmjs.com → the account → Convert to organization), give it at least two owners, and require 2FA for all members.
-- **2FA by security key.** Protect the owners' accounts with 2FA by security key (WebAuthn), not an authenticator app, which a phishing page can relay.
-- **Team mailbox.** npm shows the name and email of the account that publishes in the package's public data, so publish from a company account with a team email, not a personal one. Give the account a recovery email on a team mailbox that several people read, and make sure npm's publish notifications (an email to every owner on each publish) reach it, so that a publish nobody started is noticed.
+- **Organization.** The `@localmind` scope belongs to the npm user account "localmind" today. Convert it into an npm organization (npmjs.com → the account → Convert to organization) and require 2FA for all members.
+- **One owner: the company account.** The organization has one owner, a company account on a team mailbox. Since nobody could manage the package if that account were lost, it has two security keys (one kept by a second person or in the office safe), and its recovery codes are in the company password manager.
+- **2FA by security key.** Protect the owner's account with 2FA by security key (WebAuthn), not an authenticator app, which a phishing page can relay.
+- **Team mailbox.** npm shows the name and email of the account that publishes in the package's public data, so publish from a company account with a team email, not a personal one. Give the account a recovery email on a team mailbox that several people read, and make sure npm's publish notifications (an email to the owner on each publish) reach it, so that a publish nobody started is noticed.
 - **Few publishers.** Keep publish rights on npm to a small release team.
 
 ### GitHub settings

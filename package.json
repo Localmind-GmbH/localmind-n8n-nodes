@@ -1,6 +1,6 @@
 {
 	"name": "@localmind/n8n-nodes-localmind",
-	"version": "0.1.0",
+	"version": "1.0.0",
 	"description": "n8n nodes for Localmind: agents, conversations, documents and files, plus a chat model for n8n's AI Agent",
 	"license": "MIT",
 	"homepage": "https://localmind.ai",
