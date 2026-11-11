@@ -1,44 +1,46 @@
-# Publishes the package to npm with a provenance statement, then creates the version tag and a
-# GitHub release with the published package and a signed attestation.
-# n8n requires provenance for verified community nodes. Provenance proves that the
-# package was built by this workflow, from this repository and commit.
+# Stages the package on npm with a provenance statement; once a maintainer has approved the staged
+# version on npm with 2FA, creates the version tag and a GitHub release with the published package
+# and a signed attestation. n8n requires provenance for verified community nodes. Provenance proves
+# that the package was built by this workflow, from this repository and commit.
 #
 # A release is started by hand, from main only: Actions > Publish > Run workflow. The version
-# comes from package.json, raised beforehand in a reviewed pull request; a second maintainer
-# then approves the run. Tags start nothing: the workflow creates them after publishing.
+# comes from package.json, raised beforehand in a reviewed pull request. Two people have to agree:
+# a second maintainer approves the run on GitHub, and nothing goes live on npm before a maintainer
+# approves the staged version there with 2FA. Tags start nothing: the workflow creates them.
 #
 # Three jobs, so that publishing rights never meet third-party code:
 #   build    checks that the version is new, installs the dev tools (without their install
 #            scripts), checks and packs the package. No publishing rights, no npm token.
-#   publish  installs nothing and runs only this repository's code. After a reviewer's
-#            approval it checks the file the build job packed (its SHA-256, its package.json
-#            against the repository's, its contents) and publishes exactly that file.
-#   github-release  checks that npm serves that file and package.json, then tags the commit
-#            and attaches the file with its attestation to a GitHub release.
+#   stage    installs nothing and runs only this repository's code. After a reviewer's approval
+#            it checks the file the build job packed (its SHA-256, its package.json against the
+#            repository's, its contents) and stages exactly that file on npm (npm stage publish).
+#   github-release  waits until the staged version is approved on npm, checks that npm serves
+#            that file and package.json, then tags the commit and attaches the file with its
+#            attestation to a GitHub release.
 #
 # A dry run ("Dry run" ticked when starting the workflow, also on a branch) builds and checks the
-# package exactly as a release would, then runs `npm publish --dry-run` in a job without any
-# publishing rights or approval: nothing is published, tagged or released.
+# package exactly as a release would, then runs `npm stage publish --dry-run` in a job without any
+# publishing rights or approval: nothing is staged, published, tagged or released.
 #
-# A failed run can be re-run ("Re-run failed jobs"): publish skips a version npm already has
-# from this very file, and github-release accepts a tag that already names this commit.
+# A failed run can be re-run ("Re-run failed jobs"): stage skips a version npm already has from
+# this very file, and github-release accepts a tag that already names this commit.
 #
 # One-time setup on GitHub:
 #   Settings > Environments > "npm-publish": required reviewers (a second maintainer
-#   approves every publish), "Prevent self-review", no administrator bypass, deployment
+#   approves every release), "Prevent self-review", no administrator bypass, deployment
 #   branches limited to "main" and no tag rule: older commits hold tag-triggered versions of
 #   this workflow, which only this rule keeps from publishing.
 #   Settings > Rules > a tag ruleset for "v*.*.*": restrict updates and deletions, block
 #   force pushes (creations stay allowed: this workflow creates the tags).
 #   Settings > General > Releases: release immutability.
 #
-# One-time setup on npmjs.com (trusted publishing, no long-lived token):
-#   Package settings > Trusted Publishers > GitHub Actions: repository owner and name
-#   of this repository, workflow "publish.yml", environment "npm-publish".
-#   A trusted publisher can only be added to a package that exists: the first version is
-#   published with the NPM_FIRST_PUBLISH_TOKEN secret of the "npm-publish" environment (see
-#   RELEASING.md). The workflow refuses that token once the package exists.
-#   package.json's repository.url must name this GitHub repository for provenance.
+# One-time setup on npmjs.com (trusted publishing, no token at all):
+#   Package settings > Trusted Publisher > GitHub Actions: repository owner and name of this
+#   repository, workflow "publish.yml", environment "npm-publish", and as allowed actions only
+#   "npm stage publish" (not "npm publish", not dist-tags). Publishing access: "Require two-factor
+#   authentication and disallow tokens". A trusted publisher needs a package that exists: see
+#   RELEASING.md for the first version. package.json's repository.url must name this GitHub
+#   repository for provenance.
 
 name: Publish
 
@@ -151,7 +153,7 @@ jobs:
           sha256=$(sha256sum -- "$file" | cut -d ' ' -f 1)
           echo "file=$file" >> "$GITHUB_OUTPUT"
           echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
-          # For the approver. The publish job checks the file again, with nothing installed.
+          # For the approver. The stage job checks the file again, with nothing installed.
           {
             echo "### $file"
             echo "SHA-256: \`$sha256\`"
@@ -168,7 +170,7 @@ jobs:
           # The approval can take a while; past this, run the workflow again.
           retention-days: 30
 
-  publish:
+  stage:
     if: ${{ !inputs.dry_run }}
     needs: build
     runs-on: ubuntu-latest
@@ -190,9 +192,20 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          # Trusted publishing needs npm 11.5.1 or later, which Node 24 ships.
           node-version: 24
           package-manager-cache: false
+
+      # npm stage needs npm 11.15.0 or later, which Node 24 ships from 24.18.0 on.
+      - name: Check the npm version
+        run: |
+          version=$(npm --version)
+          if ! node -e '
+            const [a, b] = process.argv.slice(1).map((v) => v.split(".").map(Number));
+            process.exit((a[0] - b[0] || a[1] - b[1] || a[2] - b[2]) >= 0 ? 0 : 1);
+          ' "$version" 11.15.0; then
+            echo "::error::npm $version cannot stage packages; npm 11.15.0 or later is needed"
+            exit 1
+          fi
 
       # Name, version and tag come from the repository, never from the build job: its outputs are
       # only the file name and SHA-256, both checked. A forged name (a git address, say) handed to
@@ -267,55 +280,62 @@ jobs:
             exit 1
           fi
 
-      # The first version only: NPM_FIRST_PUBLISH_TOKEN, refused once the package exists, since
-      # from then on trusted publishing takes over. Publishing a packed file runs none of the
-      # package's scripts. A re-run finds the version published from this file and stops there.
-      - name: Publish to npm
+      # Only staged: the version goes live when a maintainer approves it on npm with 2FA. The trusted
+      # publisher (OIDC) allows nothing else, and staging a packed file runs none of the package's
+      # scripts. A re-run finds the version published from this very file and stops there.
+      - name: Stage on npm
         env:
           SHA256: ${{ needs.build.outputs.sha256 }}
           PACKAGE_DIR: ${{ runner.temp }}/package
-          FIRST_PUBLISH_TOKEN: ${{ secrets.NPM_FIRST_PUBLISH_TOKEN }}
         run: |
-          if exists=$(npm view "$PKG_NAME" name 2>&1); then
-            package_exists=yes
-          elif echo "$exists" | grep -q E404; then
-            package_exists=no
+          if published=$(npm view "$PKG_SPEC" version 2>&1); then
+            :
+          elif echo "$published" | grep -q E404; then
+            published=
           else
-            echo "::error::Could not ask npm for $PKG_NAME: $exists"
+            echo "::error::Could not ask npm for $PKG_SPEC: $published"
             exit 1
           fi
-          if [ -n "$FIRST_PUBLISH_TOKEN" ]; then
-            if [ "$package_exists" = yes ]; then
-              echo "::error::$PKG_NAME exists on npm: delete the NPM_FIRST_PUBLISH_TOKEN secret, publishing uses trusted publishing now"
-              exit 1
+          if [ -n "$published" ]; then
+            mkdir -p -- "$RUNNER_TEMP/registry"
+            npm pack "$PKG_SPEC" --ignore-scripts --silent --pack-destination "$RUNNER_TEMP/registry" > /dev/null
+            if [ "$(sha256sum -- "$RUNNER_TEMP/registry/$EXPECTED_FILE" | cut -d ' ' -f 1)" = "$SHA256" ]; then
+              echo "::notice::$PKG_SPEC is on npm from this very file already (a re-run); not staged again"
+              exit 0
             fi
-            echo "::warning::Publishing with NPM_FIRST_PUBLISH_TOKEN: afterwards set up trusted publishing, delete the secret and revoke the token (RELEASING.md)"
-            npm config set //registry.npmjs.org/:_authToken "$FIRST_PUBLISH_TOKEN"
+            echo "::error::$PKG_SPEC is on npm already, from another file"
+            exit 1
           fi
-          if [ "$package_exists" = yes ]; then
-            if published=$(npm view "$PKG_SPEC" version 2>&1); then
-              :
-            elif echo "$published" | grep -q E404; then
-              published=
-            else
-              echo "::error::Could not ask npm for $PKG_SPEC: $published"
-              exit 1
-            fi
-            if [ -n "$published" ]; then
-              mkdir -p -- "$RUNNER_TEMP/registry"
-              npm pack "$PKG_SPEC" --ignore-scripts --silent --pack-destination "$RUNNER_TEMP/registry" > /dev/null
-              if [ "$(sha256sum -- "$RUNNER_TEMP/registry/$EXPECTED_FILE" | cut -d ' ' -f 1)" = "$SHA256" ]; then
-                echo "::notice::$PKG_SPEC is on npm from this very file already (a re-run); not published again"
-                exit 0
-              fi
-              echo "::error::$PKG_SPEC is on npm already, from another file"
-              exit 1
-            fi
+          npm stage publish "$PACKAGE_DIR/$EXPECTED_FILE" --provenance --access public --json > "$RUNNER_TEMP/stage.json"
+          if ! stage_id=$(node -e '
+            const output = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+            const find = (value) => value && typeof value === "object"
+              ? (typeof value.stageId === "string" ? value.stageId : Object.values(value).map(find).find(Boolean))
+              : undefined;
+            const id = find(output);
+            if (!id || !/^[0-9a-f-]{36}$/i.test(id)) process.exit(1);
+            console.log(id);
+          ' "$RUNNER_TEMP/stage.json"); then
+            echo "::error::npm staged the package but named no stage ID; see Staged Packages on npmjs.com"
+            exit 1
           fi
-          npm publish "$PACKAGE_DIR/$EXPECTED_FILE" --provenance --access public
+          # For the maintainer who approves it on npm.
+          {
+            echo "### Staged on npm: $PKG_SPEC"
+            echo "Stage ID: \`$stage_id\`. Nothing is public yet."
+            echo ""
+            echo "A maintainer with 2FA checks that npm holds exactly the file built here, then approves it:"
+            echo '```bash'
+            echo "npm stage download $stage_id"
+            echo "sha256sum *-$stage_id.tgz   # must be $SHA256"
+            echo "npm stage approve $stage_id"
+            echo '```'
+            echo "Or on npmjs.com: the package > Staged Packages > Approve. The GitHub release job waits for it."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice::$PKG_SPEC is staged ($stage_id); approve it on npm with 2FA to publish it"
 
   dry-run:
-    # The publish job's checks, word for word, and npm publish --dry-run. No approval, no
+    # The stage job's checks, word for word, and npm stage publish --dry-run. No approval, no
     # environment, no npm token, no OIDC token: this job can only read the repository.
     if: ${{ inputs.dry_run }}
     needs: build
@@ -335,9 +355,20 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          # Trusted publishing needs npm 11.5.1 or later, which Node 24 ships.
           node-version: 24
           package-manager-cache: false
+
+      # npm stage needs npm 11.15.0 or later, which Node 24 ships from 24.18.0 on.
+      - name: Check the npm version
+        run: |
+          version=$(npm --version)
+          if ! node -e '
+            const [a, b] = process.argv.slice(1).map((v) => v.split(".").map(Number));
+            process.exit((a[0] - b[0] || a[1] - b[1] || a[2] - b[2]) >= 0 ? 0 : 1);
+          ' "$version" 11.15.0; then
+            echo "::error::npm $version cannot stage packages; npm 11.15.0 or later is needed"
+            exit 1
+          fi
 
       # Name, version and tag come from the repository, never from the build job: its outputs are
       # only the file name and SHA-256, both checked. A forged name (a git address, say) handed to
@@ -412,23 +443,24 @@ jobs:
             exit 1
           fi
 
-      # Everything npm would do, without publishing: no login, no provenance, nothing uploaded.
-      - name: Publish to npm (dry run)
+      # Everything npm would do, without staging: no login, no provenance, nothing uploaded.
+      - name: Stage on npm (dry run)
         env:
           PACKAGE_DIR: ${{ runner.temp }}/package
         run: |
-          npm publish "$PACKAGE_DIR/$EXPECTED_FILE" --dry-run --provenance=false --access public --ignore-scripts
+          npm stage publish "$PACKAGE_DIR/$EXPECTED_FILE" --dry-run --provenance=false --access public --ignore-scripts
           {
             echo "### Dry run passed"
-            echo "$PKG_SPEC would be published from \`$EXPECTED_FILE\` and tagged $TAG. Nothing was published, tagged or released."
+            echo "$PKG_SPEC would be staged from \`$EXPECTED_FILE\` and, once approved on npm, tagged $TAG. Nothing was staged, published, tagged or released."
           } >> "$GITHUB_STEP_SUMMARY"
 
   github-release:
     # The package exactly as npm serves it, for installations without npm access.
     if: ${{ !inputs.dry_run }}
-    needs: [build, publish]
+    needs: [build, stage]
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Most of it is the wait for the approval on npm; see the first step after the checkout.
+    timeout-minutes: 360
     permissions:
       contents: write # create the tag and the release
       id-token: write # sign the attestation
@@ -463,6 +495,20 @@ jobs:
             echo "TAG=v$version"
             echo "EXPECTED_FILE=localmind-n8n-nodes-localmind-$version.tgz"
           } >> "$GITHUB_ENV"
+
+      # The version goes live only once a maintainer approves the staged version on npm. Waited for
+      # here for five and a half hours; after that, approve it and use "Re-run failed jobs".
+      - name: Wait for the approval on npm
+        run: |
+          deadline=$(( $(date +%s) + 330 * 60 ))
+          until published=$(npm view "$PKG_SPEC" version --prefer-online 2>/dev/null) && [ -n "$published" ]; do
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::$PKG_SPEC is not approved on npm yet. Approve the staged version (npm stage approve, or Staged Packages on npmjs.com), then use Re-run failed jobs."
+              exit 1
+            fi
+            sleep 60
+          done
+          echo "::notice::$PKG_SPEC is live on npm"
 
       - name: Download the published package
         run: |

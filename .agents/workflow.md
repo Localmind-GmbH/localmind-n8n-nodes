@@ -89,6 +89,6 @@ commands. Short overview of the commands:
   cloud eligibility)
 - `n8n-node release` - **not used in this repository.** Releases are published
   only by the GitHub Actions workflow `.github/workflows/publish.yml`, with npm
-  provenance and a maintainer's approval; see `RELEASING.md`. Never run
-  `n8n-node release` or `npm publish` locally, and never rewrite `CHANGELOG.md`
+  provenance and two approvals; see `RELEASING.md`. Never run
+  `n8n-node release`, `npm publish` or `npm stage publish` locally, and never rewrite `CHANGELOG.md`
   from the commits: it is written by hand.

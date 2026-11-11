@@ -39,7 +39,7 @@ jobs:
       - run: npm run build
       # Only the expected files, and nothing secret or internal in them.
       - run: npm run check:package
-      # The release's publish job checks the packed file this way, with nothing installed.
+      # The release's stage job checks the packed file this way, with nothing installed.
       - name: Check the packed file as the release does
         run: |
           file=$(npm pack --ignore-scripts --json --pack-destination "$RUNNER_TEMP" | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8"))[0].filename')

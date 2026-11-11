@@ -34,4 +34,4 @@ The first release.
 
 ### Releases
 
-- Published from GitHub Actions with npm provenance. Each GitHub release carries the package file with a signed attestation, so it can be verified before an offline installation.
+- Published from GitHub Actions with npm provenance. The workflow only stages each version on npm; it goes live once a maintainer approves it with 2FA. Each GitHub release carries the package file with a signed attestation, so it can be verified before an offline installation.

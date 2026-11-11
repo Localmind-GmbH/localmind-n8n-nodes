@@ -115,7 +115,7 @@ npm run build
 npm run check:package    # after the build: checks what the package would contain
 ```
 
-Every pull request and every push to `main` runs lint, type check, tests and build, verifies the dependencies' signatures and checks the package contents. Releases are built and published by GitHub Actions with npm provenance, after a maintainer's approval.
+Every pull request and every push to `main` runs lint, type check, tests and build, verifies the dependencies' signatures and checks the package contents. Releases are built by GitHub Actions and published with npm provenance after two approvals: on GitHub, and on npm with 2FA.
 
 ## Security
 

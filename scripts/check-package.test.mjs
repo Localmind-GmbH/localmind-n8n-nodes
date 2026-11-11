@@ -16,7 +16,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 // which the lint rules for node code forbid.
 const manifest = JSON.parse(readFileSync('package.json', 'utf8'));
 
-/** An unpacked package as the publish job checks it: the repository's package.json, the entry files. */
+/** An unpacked package as the stage job checks it: the repository's package.json, the entry files. */
 function unpacked(files = {}) {
 	const dir = mkdtempSync(join(tmpdir(), 'check-package-'));
 	copyFileSync('package.json', join(dir, 'package.json'));
@@ -41,7 +41,7 @@ function check(dir) {
 	return { passed: run.status === 0, output: `${run.stdout}${run.stderr}` };
 }
 
-describe('the package check, as the publish job runs it', () => {
+describe('the package check, as the stage job runs it', () => {
 	it('passes a clean package', () => {
 		expect(check(unpacked({ 'dist/nodes/a.js': 'const url = "https://localmind.ai";' }))).toEqual({
 			passed: true,
