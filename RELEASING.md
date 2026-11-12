@@ -2,7 +2,7 @@
 
 For maintainers. The [README](README.md) is the package's page on npm and stays free of internal notes.
 
-**Status:** not published yet. The first release is 1.0.0; first do the one-time setup in [Before the first release](#before-the-first-release).
+**Status:** the package exists on npm with an empty placeholder (0.0.1). The first release is 1.0.0; first finish the one-time setup in [Before the first release](#before-the-first-release).
 
 ## Versions
 
@@ -89,7 +89,7 @@ npm provenance and GitHub's build attestations need a public repository, so it g
 
 ### First publish
 
-npm trusted publishing can only be set up for a package that exists. The package is created without any token, by staging an empty shell once and rejecting it:
+npm trusted publishing can only be set up for a package that exists. The package is created without any token, by staging an empty shell once and approving it:
 
 1. A member of the npm organization with publish rights and 2FA, on their own machine (npm 11.15 or later; check with `npm --version`, otherwise use `npx npm@11.19.1` in place of `npm`). First check which email that npm account uses (npmjs.com → Account → Email): npm will list it publicly as a maintainer of the package.
 
@@ -100,13 +100,19 @@ npm trusted publishing can only be set up for a package that exists. The package
    npm stage publish --access public
    ```
 
-   npm creates the package with its own public placeholder version, `0.0.0-stage`. The shell itself is only staged, not public.
+   npm creates the package with its own public placeholder version, `0.0.0-stage`. The shell itself is only staged, not public yet.
 
-2. Reject the staged shell: `npm stage reject <stage-id>`, or on npmjs.com the package → **Staged Packages** → **Reject**. Then `npm logout`, and delete the folder. `npm view @localmind/n8n-nodes-localmind versions` now shows only `0.0.0-stage`.
-3. The organization's owner, in the package's settings on npmjs.com:
-   - **Trusted Publisher** → GitHub Actions: this repository, workflow `publish.yml`, environment `npm-publish`, and as **allowed actions** only `npm stage publish` (not `npm publish`, not dist-tags).
-   - **Publishing access**: "Require two-factor authentication and disallow tokens".
+2. Check that the staged shell holds only its `package.json` (`npm stage view <stage-id>`), then approve it: `npm stage approve <stage-id>`. Do not reject it: rejecting the package's first staged version may also remove the placeholder, and with it the package. Then `npm logout`, and delete the folder. `npm view @localmind/n8n-nodes-localmind versions` now shows `0.0.0-stage` and `0.0.1`, with `0.0.1` as `latest`.
+3. A maintainer with 2FA, in the package's **Settings** on npmjs.com (the two sections save separately):
+   - **Publishing access**: "Require two-factor authentication and disallow bypass 2fa tokens", then **Update Package Settings**.
+   - **Trusted Publisher** → GitHub Actions: organization `Localmind-GmbH`, repository `localmind-n8n-nodes`, workflow `publish.yml`, environment `npm-publish`. Under **Allowed actions**, leave `npm publish` and `npm dist-tag` unticked (`npm stage publish` is always allowed), then **Set up connection**. npm shows the connection as "Pending validation" until the workflow first uses it, which has to happen within 48 hours. The workflow can only stage once the repository is public, so check the connection on the day of the first release, right after going public; if its time ran out, delete it and set it up again with the same values.
 4. Release 1.0.0 as in [Release steps](#release-steps). The workflow stages it through trusted publishing, with provenance and without any token, and it goes live with the approval on npm.
+5. Deprecate the two placeholders, so that nobody installs them by mistake (with 2FA, from the shell's maintainer or the owner):
+
+   ```bash
+   npm deprecate @localmind/n8n-nodes-localmind@0.0.1 "Placeholder without code. Install 1.0.0 or later."
+   npm deprecate @localmind/n8n-nodes-localmind@0.0.0-stage "Placeholder without code. Install 1.0.0 or later."
+   ```
 
 From then on, npm shows GitHub Actions as the publisher of every version.
 
