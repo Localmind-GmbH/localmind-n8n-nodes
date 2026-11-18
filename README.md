@@ -95,11 +95,11 @@ Some features depend on the Localmind version:
 | Ask and the Chat Model report busy code sandboxes as an error (before, the agent answers without code)   | 1.6.0           |
 | Send Message waits with a lighter status check, faster in long conversations                             | 1.6.0           |
 | Audio and HTML uploads are only stored, not indexed (before, Localmind marks them as failed)             | 1.6.0           |
-| Send Message with PDF, Office and other files: the agent gets their text and the original in its sandbox | 1.7.0, upcoming |
-| Generated files whose names have characters outside Latin-1 (such as "–" or emoji) can be downloaded     | 1.7.0, upcoming |
-| Generated files carry an AI label (EU AI Act)                                                            | 1.7.0, upcoming |
-| Agents answer in the language of the message and no longer see the key user's name and email             | 1.7.0, upcoming |
-| Ask and the Chat Model retry a rate limit that came before the agent acted                               | 1.7.0, upcoming |
+| Send Message with PDF, Office and other files: the agent gets their text and the original in its sandbox | 1.7.0           |
+| Generated files whose names have characters outside Latin-1 (such as "–" or emoji) can be downloaded     | 1.7.0           |
+| Generated files carry an AI label (EU AI Act)                                                            | 1.7.0           |
+| Agents answer in the language of the message and no longer see the key user's name and email             | 1.7.0           |
+| Ask and the Chat Model retry a rate limit that came before the agent acted                               | 1.7.0           |
 
 ## Development
 
