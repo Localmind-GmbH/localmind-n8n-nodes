@@ -12,7 +12,7 @@ A Localmind agent calling an n8n workflow needs no package: see [Workflow as age
 ## Requirements
 
 - Self-hosted n8n 2.16 or later.
-- Localmind with a user API key ([how to create one](https://github.com/Localmind-GmbH/localmind-n8n-nodes/blob/main/docs/customer-guide.md#1-create-an-api-key)). Tested on Localmind 1.5.0, 1.6.0 and the upcoming 1.7.0; see [Compatibility](#compatibility).
+- Localmind with a user API key ([how to create one](https://github.com/Localmind-GmbH/localmind-n8n-nodes/blob/main/docs/customer-guide.md#1-create-an-api-key)). Tested on Localmind 1.5.0, 1.6.0 and 1.7.0; see [Compatibility](#compatibility).
 
 ## Installation
 
@@ -54,7 +54,7 @@ Agents, spaces, conversations and documents are picked from a searchable list or
 | One answer, with your own system message, temperature, maximum tokens or JSON output   | Agent → Ask                                             |
 | PDF or Office documents read by the agent for one answer                               | Agent → Ask                                             |
 | Several steps that build on each other, code execution, generated files (Excel, Word…) | Conversation → Create, then Send Message                |
-| An Excel or other file the agent opens and works on in code                            | Conversation → Send Message (Localmind 1.7.0, upcoming) |
+| An Excel or other file the agent opens and works on in code                            | Conversation → Send Message (Localmind 1.7.0) |
 | Find passages in a space's documents, or add documents to a space                      | Document → Search, File → Upload                        |
 | A Localmind agent inside n8n's AI Agent or an AI chain                                 | Localmind Chat Model                                    |
 
@@ -83,7 +83,7 @@ All details: [Operations in detail](https://github.com/Localmind-GmbH/localmind-
 
 **n8n 2.16 or later.** The Chat Model is built on n8n's AI node SDK, which n8n provides from 2.16 on, and n8n loads a package as a whole. Some features need a newer n8n: the environment-managed package list 2.21, the credential test's own messages 2.34, and PDFs from the chat and an output parser with streaming 2.41. Tested on n8n 2.16, 2.41 and 2.46.
 
-**Localmind:** tested on 1.6.0, on the development version of 1.7.0, and on 1.5.0 without code execution. The nodes are built for 1.0.0 and later; versions before 1.5.0 are not tested. **Localmind 1.7.0 is not released yet**: what these documents say about it was tested on its development version.
+**Localmind:** tested on 1.7.0, 1.6.0, and on 1.5.0 without code execution. The nodes are built for 1.0.0 and later; versions before 1.5.0 are not tested.
 
 Some features depend on the Localmind version:
 
