@@ -26,7 +26,7 @@ Create a credential of type **Localmind API**:
 
 | Field                        | Value                                                                                                                                                                                                   |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| API URL                      | Your Localmind API host, usually ending in `-api` (for example `https://acme-api.example.com`), not the app host ending in `-app`. It must use `https://`; plain `http://` only works for this machine. |
+| API URL                      | Your Localmind API host, usually ending in `-api` (for example `https://acme-api.example.com`), not the app host ending in `-app`. It must use `https://`; plain `http://` only works for local testing. |
 | API Key                      | A Localmind user API key (`sk-…`). The nodes act with its user's permissions and within the key's space limits.                                                                                         |
 | Allowed HTTP Request Domains | Leave it at **None**. It only concerns n8n's HTTP Request node and keeps the key from being sent to other hosts. The Localmind nodes are not affected.                                                  |
 
