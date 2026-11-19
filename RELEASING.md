@@ -27,7 +27,7 @@ Releases come only from GitHub Actions (`.github/workflows/publish.yml`), with n
 
    The build is reproducible, so the two must be equal. Only then they approve the run (**Review deployments**). The stage job then stages the version on npm.
 
-6. **Approve on npm.** The stage job's summary names the stage ID. A maintainer with 2FA and publish rights checks that npm holds exactly the file the build job packed, then approves it (npm 11.15 or later, logged in with `npm login`):
+6. **Approve on npm.** The stage job's summary names the stage ID. Someone logged in as the company account (`npm login`, npm 11.15 or later), the only account with publish rights, checks that npm holds exactly the file the build job packed, then approves it:
 
    ```bash
    npm stage download <stage-id>
@@ -57,11 +57,11 @@ One-time steps, in this order.
 
 ### npm account
 
-- **Organization.** The `@localmind` scope belongs to the npm organization `localmind`, converted from the former user account of that name. The release team are its members; require 2FA for all of them.
+- **Organization.** The `@localmind` scope belongs to the npm organization `localmind`, converted from the former user account of that name. Require 2FA for all its members.
 - **One owner: the company account.** The organization has one owner, a company account on a team mailbox. Its recovery codes are kept in the company password manager, in case its security key is lost.
 - **2FA by security key.** Protect the owner's account with 2FA by security key (WebAuthn), not an authenticator app, which a phishing page can relay.
 - **Team mailbox.** npm lists every maintainer of a package publicly with name and email (`npm view @localmind/n8n-nodes-localmind maintainers`), so use npm accounts with a team email, not a personal one, where possible. Versions published by the workflow show GitHub Actions as their publisher. Give the company account a recovery email on a team mailbox that several people read, and make sure npm's publish notifications (an email to the owner on each publish) reach it, so that a publish nobody started is noticed.
-- **Few publishers.** Keep publish rights on npm to a small release team.
+- **One publisher.** Only the company account has write access to the package, through the npm team `release`. The default team `developers`, which holds every member of the organization, has no access to it, so no other member can approve a release or appears as its maintainer. Check with `npm access list collaborators @localmind/n8n-nodes-localmind`.
 
 ### GitHub settings
 
@@ -103,11 +103,11 @@ npm trusted publishing can only be set up for a package that exists. The package
    npm creates the package with its own public placeholder version, `0.0.0-stage`. The shell itself is only staged, not public yet.
 
 2. Check that the staged shell holds only its `package.json` (`npm stage view <stage-id>`), then approve it: `npm stage approve <stage-id>`. Do not reject it: rejecting the package's first staged version may also remove the placeholder, and with it the package. Then `npm logout`, and delete the folder. `npm view @localmind/n8n-nodes-localmind versions` now shows `0.0.0-stage` and `0.0.1`, with `0.0.1` as `latest`.
-3. A maintainer with 2FA, in the package's **Settings** on npmjs.com (the two sections save separately):
+3. As the company account, in the package's **Settings** on npmjs.com (the two sections save separately):
    - **Publishing access**: "Require two-factor authentication and disallow tokens", then **Update Package Settings**.
    - **Trusted Publisher** → GitHub Actions: organization `Localmind-GmbH`, repository `localmind-n8n-nodes`, workflow `publish.yml`, environment `npm-publish`. Under **Allowed actions**, leave `npm publish` and `npm dist-tag` unticked (`npm stage publish` is always allowed), then **Set up connection**. npm shows the connection as "Pending validation" until the workflow first uses it, which has to happen within 48 hours. The workflow can only stage once the repository is public, so check the connection on the day of the first release, right after going public; if its time ran out, delete it and set it up again with the same values.
 4. Release 1.0.0 as in [Release steps](#release-steps). The workflow stages it through trusted publishing, with provenance and without any token, and it goes live with the approval on npm.
-5. Deprecate the two placeholders, so that nobody installs them by mistake (with 2FA, from the shell's maintainer or the owner):
+5. Deprecate the two placeholders, so that nobody installs them by mistake (as the company account):
 
    ```bash
    npm deprecate @localmind/n8n-nodes-localmind@0.0.1 "Placeholder without code. Install 1.0.0 or later."
