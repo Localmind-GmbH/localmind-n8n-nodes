@@ -560,7 +560,7 @@ jobs:
             const fs = require("fs");
             const record = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
             const repo = JSON.parse(fs.readFileSync("repository/package.json", "utf8"));
-            // The registry stores an object's keys in its own order: compared with the keys sorted.
+            // The registry stores the keys of an object in an order of its own: compared with the keys sorted.
             const sorted = (value) => value && typeof value === "object" && !Array.isArray(value)
               ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sorted(value[key])]))
               : value;
