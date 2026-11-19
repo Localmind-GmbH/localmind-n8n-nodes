@@ -108,10 +108,13 @@ jobs:
             exit 1
           fi
           # Only "not found" (E404) means "not published"; any other failure stops the run.
+          # On npm but without a tag: a release whose GitHub part failed. A new run may finish
+          # it, if this commit packs the very file npm has (checked after packing).
           if published=$(npm view "$name@$version" version 2>&1); then
             if [ -n "$published" ]; then
-              echo "::error::$name@$version is on npm already: raise the version in package.json first"
-              exit 1
+              echo "published=true" >> "$GITHUB_OUTPUT"
+              echo "::notice::$name@$version is on npm already, without the tag $tag: this run can only finish that release"
+              exit 0
             fi
           elif ! echo "$published" | grep -q E404; then
             echo "::error::Could not ask npm for $name@$version: $published"
@@ -161,6 +164,21 @@ jobs:
             tar -tzvf "$file"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check that npm has this very file
+        if: ${{ steps.version.outputs.published == 'true' }}
+        env:
+          FILE: ${{ steps.pack.outputs.file }}
+          SHA256: ${{ steps.pack.outputs.sha256 }}
+        run: |
+          spec="$(node -p "require('./package.json').name")@$(node -p "require('./package.json').version")"
+          mkdir -- "$RUNNER_TEMP/registry"
+          npm pack "$spec" --ignore-scripts --silent --pack-destination "$RUNNER_TEMP/registry" > /dev/null
+          if [ "$(sha256sum -- "$RUNNER_TEMP/registry/$FILE" | cut -d ' ' -f 1)" != "$SHA256" ]; then
+            echo "::error::$spec is on npm already, from another file: raise the version in package.json first"
+            exit 1
+          fi
+          echo "::notice::$spec is on npm from this very file; the run goes on to the GitHub release"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -542,7 +560,11 @@ jobs:
             const fs = require("fs");
             const record = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
             const repo = JSON.parse(fs.readFileSync("repository/package.json", "utf8"));
-            const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+            // The registry stores an object's keys in its own order: compared with the keys sorted.
+            const sorted = (value) => value && typeof value === "object" && !Array.isArray(value)
+              ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sorted(value[key])]))
+              : value;
+            const same = (a, b) => JSON.stringify(sorted(a ?? null)) === JSON.stringify(sorted(b ?? null));
             const fields = ["name", "version", "dependencies", "optionalDependencies", "peerDependencies",
               "peerDependenciesMeta", "bundleDependencies", "bundledDependencies", "bin", "os", "cpu",
               "engines", "gypfile"];

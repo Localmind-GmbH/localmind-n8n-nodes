@@ -49,7 +49,7 @@ A **dry run** builds and checks the package exactly as a release would, then a `
 
 ### If a run fails
 
-If the approval on npm takes longer than the github-release job waits, approve it and then open the run and use **Re-run failed jobs**. A re-run of the github-release job only gets further once the version is approved on npm: before that, it waits again. Re-running works for any failure after staging: the stage job finds the version on npm from this very file and stops there, and the tag step accepts its own tag on this commit. A new run would stop with "already on npm". If a version was staged by mistake, reject it on npm; it never goes live.
+If the approval on npm takes longer than the github-release job waits, approve it and then open the run and use **Re-run failed jobs**. A re-run of the github-release job only gets further once the version is approved on npm: before that, it waits again. Re-running works for any failure after staging: the stage job finds the version on npm from this very file and stops there, and the tag step accepts its own tag on this commit. If the failure lies in the workflow itself, a re-run repeats it, since it uses the workflow as it was: merge the fix, then start the workflow again on `main`. A new run for a version that is on npm but has no tag only finishes that release, and only if it packs the very file npm has; nothing is staged again, and the tag goes on the commit of the new run. If a version was staged by mistake, reject it on npm; it never goes live.
 
 ## Before the first release
 
