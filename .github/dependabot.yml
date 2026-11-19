@@ -21,3 +21,8 @@ updates:
       dev-tools:
         patterns:
           - '*'
+    # Major versions are raised by hand: @n8n/node-cli 1.x is n8n's release-candidate line
+    # (npm's "latest" is 0.x), and the CLI decides which eslint and TypeScript majors work.
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
