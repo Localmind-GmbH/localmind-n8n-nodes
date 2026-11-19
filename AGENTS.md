@@ -82,12 +82,13 @@ project _may_ contain example nodes and/or credentials that need to be
 - **Never publish or stage** from a local machine (`npm publish`, `npm stage publish`, `n8n-node release`):
   releases come only from the GitHub Actions workflow, see `RELEASING.md`. The one exception is the
   one-time empty shell that creates the package, which a maintainer stages by hand (`RELEASING.md`)
-- **Commit only with the email `support@localmind.ai`**, as author and as committer: a commit's
-  email stays in the history for good, and no engineer's own address may end up there. Run
-  `git config user.email support@localmind.ai` in a new clone before the first commit, and check
-  with `git log --format='%ae %ce'` before pushing. Do not put a personal address anywhere else
-  either: `Co-authored-by` lines, code, tests or docs. Edits on GitHub's website use the account's
-  email, so turn on "Keep my email addresses private" there first (Settings → Emails)
+- **Never commit with a personal email address**: a commit's email stays in the history for good.
+  Allowed are `support@localmind.ai` and GitHub's no-reply addresses; CI fails a pull request whose
+  commits carry any other, as author, committer or in a trailer such as `Co-authored-by`. In a new
+  clone, run `git config user.email support@localmind.ai` before the first commit. On GitHub, turn
+  on "Keep my email addresses private" (Settings → Emails) before editing or merging there: the
+  merge button writes the account's email into the merge commit, which CI sees only after the
+  merge. Do not put a personal address into code, tests or docs either
 - Read `.agents/workflow.md` for more info
 
 ## Context-specific docs

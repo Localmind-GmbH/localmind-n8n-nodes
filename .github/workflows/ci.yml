@@ -1,4 +1,5 @@
-# Lint, unit tests, build and package check for every pull request and push to main.
+# Lint, unit tests, build, package check and a check of the commits' email addresses for every
+# pull request and push to main.
 
 name: CI
 
@@ -23,6 +24,35 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The whole history: the email check below reads the commits of the pull request.
+          fetch-depth: 0
+
+      # No engineer's own address may enter the history (see AGENTS.md): only the support address
+      # and GitHub's no-reply addresses, as author, committer or in a trailer. On a push to main
+      # this covers the merge commit as well, which GitHub's merge button creates.
+      - name: Check the commits' email addresses
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          ALLOWED: '^(support@localmind[.]ai|noreply@github[.]com|support@github[.]com|noreply@anthropic[.]com|[^@]+@users[.]noreply[.]github[.]com)$'
+        run: |
+          # After a forced push, the commit before it may be gone: then only the newest is checked.
+          if git cat-file -e "$BASE^{commit}" 2>/dev/null; then range="$BASE..$HEAD"; else range="-1 $HEAD"; fi
+          # shellcheck disable=SC2086
+          bad=$(git log --format='%h <%ae> <%ce> %(trailers:only,unfold,separator=%x20)' $range |
+            awk -v allowed="$ALLOWED" '{
+              commit = $1
+              while (match($0, /<[^<>@ ]+@[^<>@ ]+>/)) {
+                email = substr($0, RSTART + 1, RLENGTH - 2)
+                if (email !~ allowed) print commit, email
+                $0 = substr($0, RSTART + RLENGTH)
+              }
+            }' | sort -u)
+          if [ -n "$bad" ]; then
+            echo "::error::Commits with an email address that is not allowed (commit, address). Rewrite them with the support address, see AGENTS.md."
+            echo "$bad"
+            exit 1
+          fi
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
