@@ -58,7 +58,7 @@ One-time steps, in this order.
 ### npm account
 
 - **Organization.** The `@localmind` scope belongs to the npm organization `localmind`, converted from the former user account of that name. The release team are its members; require 2FA for all of them.
-- **One owner: the company account.** The organization has one owner, a company account on a team mailbox. Since nobody could manage the package if that account were lost, it has two security keys (one kept by a second person or in the office safe), and its recovery codes are in the company password manager.
+- **One owner: the company account.** The organization has one owner, a company account on a team mailbox. Its recovery codes are kept in the company password manager, in case its security key is lost.
 - **2FA by security key.** Protect the owner's account with 2FA by security key (WebAuthn), not an authenticator app, which a phishing page can relay.
 - **Team mailbox.** npm lists every maintainer of a package publicly with name and email (`npm view @localmind/n8n-nodes-localmind maintainers`), so use npm accounts with a team email, not a personal one, where possible. Versions published by the workflow show GitHub Actions as their publisher. Give the company account a recovery email on a team mailbox that several people read, and make sure npm's publish notifications (an email to the owner on each publish) reach it, so that a publish nobody started is noticed.
 - **Few publishers.** Keep publish rights on npm to a small release team.

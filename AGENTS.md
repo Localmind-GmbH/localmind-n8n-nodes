@@ -82,6 +82,12 @@ project _may_ contain example nodes and/or credentials that need to be
 - **Never publish or stage** from a local machine (`npm publish`, `npm stage publish`, `n8n-node release`):
   releases come only from the GitHub Actions workflow, see `RELEASING.md`. The one exception is the
   one-time empty shell that creates the package, which a maintainer stages by hand (`RELEASING.md`)
+- **Commit only with the email `support@localmind.ai`**, as author and as committer: a commit's
+  email stays in the history for good, and no engineer's own address may end up there. Run
+  `git config user.email support@localmind.ai` in a new clone before the first commit, and check
+  with `git log --format='%ae %ce'` before pushing. Do not put a personal address anywhere else
+  either: `Co-authored-by` lines, code, tests or docs. Edits on GitHub's website use the account's
+  email, so turn on "Keep my email addresses private" there first (Settings → Emails)
 - Read `.agents/workflow.md` for more info
 
 ## Context-specific docs
