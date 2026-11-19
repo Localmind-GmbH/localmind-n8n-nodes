@@ -81,7 +81,7 @@ On GitHub's Free plan, rulesets and the environment's required reviewers take ef
 
 npm provenance and GitHub's build attestations need a public repository, so it goes public before the first release. Everything the repository ever held becomes visible:
 
-- Check that it has only `main`: no other branches, tags or pull requests.
+- Check that it has only `main`, no other branches or tags, and that the pull requests hold nothing internal: GitHub cannot delete a pull request.
 - Delete old Actions runs and their artifacts.
 - Push only from a clone whose history starts at the public first commit; the internal history from before must never reach GitHub.
 - `repository.url` in `package.json` names the repository, and npm provenance requires the two to match. The README links the customer guide in that repository, and `check:package` allows GitHub links only into it, so a new name changes all three.
